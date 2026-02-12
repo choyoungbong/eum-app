@@ -1,0 +1,336 @@
+// Phase 5: 실시간 채팅 + mVoIP
+// Updated: 2024-02-08
+// 기반: Phase 4 스키마
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========== ENUMS ==========
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum ResourceType {
+  FILE
+  FOLDER
+  POST
+  CHATROOM  // ← Phase 5 추가
+}
+
+enum Permission {
+  VIEW
+  EDIT
+  ADMIN
+}
+
+enum Visibility {
+  PRIVATE
+  SHARED
+  PUBLIC
+}
+
+// ========== Phase 5 추가 ENUMS ==========
+
+enum ChatRoomType {
+  DIRECT    // 1:1 채팅
+  GROUP     // 그룹 채팅
+}
+
+enum MessageType {
+  TEXT      // 일반 텍스트
+  FILE      // 파일 전송
+  CALL_LOG  // 통화 기록
+  SYSTEM    // 시스템 메시지
+}
+
+enum CallStatus {
+  PENDING   // 발신 중
+  ACCEPTED  // 수락됨
+  REJECTED  // 거절됨
+  MISSED    // 부재중
+  ENDED     // 종료됨
+}
+
+enum CallType {
+  VOICE     // 음성 통화
+  VIDEO     // 영상 통화
+}
+
+enum NetworkType {
+  WIFI      // Wi-Fi
+  CELLULAR  // 데이터
+  OFFLINE   // 오프라인
+}
+
+// ========== MODELS ==========
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  name          String
+  role          Role      @default(USER)
+  emailVerified Boolean   @default(false) @map("email_verified")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  
+  // Phase 5 추가
+  isOnline      Boolean   @default(false) @map("is_online")           // 온라인 상태
+  lastSeenAt    DateTime? @map("last_seen_at")                        // 마지막 접속
+  fcmToken      String?   @map("fcm_token")                           // FCM 토큰
+  networkType   NetworkType @default(OFFLINE) @map("network_type")    // 네트워크 타입
+  
+  files                File[]
+  folders              Folder[]
+  posts                Post[]
+  comments             Comment[]
+  sharedResources      SharedResource[] @relation("SharedWith")
+  ownedSharedResources SharedResource[] @relation("Owner")
+  savedSearches        SavedSearch[]
+  
+  // Phase 5 관계
+  chatRoomMembers      ChatRoomMember[]
+  sentMessages         ChatMessage[]
+  callsInitiated       Call[] @relation("CallInitiator")
+  callsReceived        Call[] @relation("CallReceiver")
+  
+  @@map("users")
+}
+
+// ========== Phase 5: 채팅 시스템 ==========
+
+model ChatRoom {
+  id        String       @id @default(cuid())
+  name      String?      // 그룹 채팅 이름 (1:1은 null)
+  type      ChatRoomType @default(DIRECT)
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+  
+  members   ChatRoomMember[]
+  messages  ChatMessage[]
+  calls     Call[]
+  
+  @@map("chat_rooms")
+}
+
+model ChatRoomMember {
+  id         String   @id @default(cuid())
+  chatRoomId String   @map("chat_room_id")
+  userId     String   @map("user_id")
+  joinedAt   DateTime @default(now()) @map("joined_at")
+  lastReadAt DateTime? @map("last_read_at")  // 마지막 읽은 시간
+  
+  chatRoom   ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([chatRoomId, userId])
+  @@index([chatRoomId])
+  @@index([userId])
+  @@map("chat_room_members")
+}
+
+model ChatMessage {
+  id         String      @id @default(cuid())
+  chatRoomId String      @map("chat_room_id")
+  senderId   String      @map("sender_id")
+  type       MessageType @default(TEXT)
+  content    String?     // 텍스트 메시지 내용
+  fileId     String?     @map("file_id")      // 파일 메시지인 경우
+  callId     String?     @map("call_id")      // 통화 기록인 경우
+  createdAt  DateTime    @default(now()) @map("created_at")
+  
+  chatRoom   ChatRoom    @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  sender     User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  
+  @@index([chatRoomId])
+  @@index([senderId])
+  @@index([createdAt])
+  @@map("chat_messages")
+}
+
+// ========== Phase 5: mVoIP 시스템 ==========
+
+model Call {
+  id           String     @id @default(cuid())
+  chatRoomId   String     @map("chat_room_id")
+  initiatorId  String     @map("initiator_id")   // 발신자
+  receiverId   String     @map("receiver_id")    // 수신자
+  type         CallType   @default(VOICE)
+  status       CallStatus @default(PENDING)
+  startedAt    DateTime?  @map("started_at")     // 통화 시작 시간
+  endedAt      DateTime?  @map("ended_at")       // 통화 종료 시간
+  duration     Int?                              // 통화 시간 (초)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  
+  chatRoom     ChatRoom   @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  initiator    User       @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  receiver     User       @relation("CallReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  
+  @@index([chatRoomId])
+  @@index([initiatorId])
+  @@index([receiverId])
+  @@index([status])
+  @@map("calls")
+}
+
+// ========== 기존 Phase 4 모델들 ==========
+
+model Folder {
+  id        String   @id @default(cuid())
+  name      String
+  parentId  String?  @map("parent_id")
+  userId    String   @map("user_id")
+  color     String?
+  icon      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent    Folder?  @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children  Folder[] @relation("FolderHierarchy")
+  files     File[]
+  
+  @@index([userId])
+  @@index([parentId])
+  @@map("folders")
+}
+
+model File {
+  id              String    @id @default(cuid())
+  filename        String
+  originalName    String    @map("original_name")
+  filepath        String
+  size            BigInt
+  mimeType        String    @map("mime_type")
+  hash            String?   @unique
+  thumbnailUrl    String?   @map("thumbnail_url")
+  transcodeStatus String?   @default("PENDING") @map("transcode_status")
+  transcodeJobId  String?   @map("transcode_job_id")
+  transcodedPaths Json?     @map("transcoded_paths")
+  userId          String    @map("user_id")
+  folderId        String?   @map("folder_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder          Folder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  fileTags        FileTag[]
+  
+  @@index([userId])
+  @@index([folderId])
+  @@map("files")
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  fileTags  FileTag[]
+  postTags  PostTag[]
+  
+  @@map("tags")
+}
+
+model FileTag {
+  id        String   @id @default(cuid())
+  fileId    String   @map("file_id")
+  tagId     String   @map("tag_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  file      File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  
+  @@unique([fileId, tagId])
+  @@index([fileId])
+  @@index([tagId])
+  @@map("file_tags")
+}
+
+model PostTag {
+  id        String   @id @default(cuid())
+  postId    String   @map("post_id")
+  tagId     String   @map("tag_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  
+  @@unique([postId, tagId])
+  @@index([postId])
+  @@index([tagId])
+  @@map("post_tags")
+}
+
+model SavedSearch {
+  id        String   @id @default(cuid())
+  name      String
+  query     Json
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@map("saved_searches")
+}
+
+model Post {
+  id         String     @id @default(cuid())
+  title      String
+  content    String
+  visibility Visibility @default(PRIVATE)
+  userId     String     @map("user_id")
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+  
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comments        Comment[]
+  postTags        PostTag[]
+  
+  @@index([userId])
+  @@map("posts")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([postId])
+  @@index([userId])
+  @@map("comments")
+}
+
+model SharedResource {
+  id           String       @id @default(cuid())
+  resourceType ResourceType
+  resourceId   String       @map("resource_id")
+  ownerId      String       @map("owner_id")
+  sharedWithId String       @map("shared_with_id")
+  permission   Permission   @default(VIEW)
+  createdAt    DateTime     @default(now()) @map("created_at")
+  
+  owner        User         @relation("Owner", fields: [ownerId], references: [id], onDelete: Cascade)
+  sharedWith   User         @relation("SharedWith", fields: [sharedWithId], references: [id], onDelete: Cascade)
+  
+  @@unique([resourceType, resourceId, sharedWithId])
+  @@index([ownerId])
+  @@index([sharedWithId])
+  @@index([resourceType, resourceId])
+  @@map("shared_resources")
+}

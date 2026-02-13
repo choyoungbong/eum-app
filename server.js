@@ -32,11 +32,19 @@ app.prepare().then(() => {
   // Socket.IO 설정
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+      origin: [
+        process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+        "http://localhost:3000",
+        /\.up\.railway\.app$/,
+        /\.mooo\.com$/,
+      ],
       methods: ["GET", "POST"],
       credentials: true,
     },
     transports: ["websocket", "polling"],
+    allowEIO3: true,
+    pingTimeout: 60000,
+    pingInterval: 25000,
   });
 
   // Socket.IO 미들웨어 - 인증

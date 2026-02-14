@@ -102,6 +102,8 @@ model User {
   callsInitiated       Call[] @relation("CallInitiator")
   callsReceived        Call[] @relation("CallReceiver")
   
+  passwordResetTokens PasswordResetToken[]
+
   @@map("users")
 }
 
@@ -333,4 +335,16 @@ model SharedResource {
   @@index([sharedWithId])
   @@index([resourceType, resourceId])
   @@map("shared_resources")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_reset_tokens")
 }

@@ -11,17 +11,32 @@ function initFirebase() {
   }
 
   // 환경 변수 없으면 스킵 (개발 환경)
-  const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+  let serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
   if (!serviceAccountKey || serviceAccountKey.trim() === "") {
     console.warn("⚠️  FIREBASE_SERVICE_ACCOUNT_KEY 없음 - 푸시 알림 비활성화");
     return false;
   }
 
   try {
-    const serviceAccount = JSON.parse(serviceAccountKey);
+    // 1. 혹시 문자열이 이중 따옴표로 감싸져 있는 경우 처리
+    if (serviceAccountKey.startsWith('"') && serviceAccountKey.endsWith('"')) {
+      serviceAccountKey = JSON.parse(serviceAccountKey);
+    }
+
+    // 2. JSON 파싱
+    const serviceAccount = typeof serviceAccountKey === 'string' 
+      ? JSON.parse(serviceAccountKey) 
+      : serviceAccountKey;
+
+    // 3. Private Key의 줄바꿈 문자(\n)를 실제 줄바꿈으로 치환 (에러 해결의 핵심)
+    if (serviceAccount && serviceAccount.private_key) {
+      serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+    }
+
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
+
     firebaseInitialized = true;
     console.log("✅ Firebase Admin 초기화 완료");
     return true;

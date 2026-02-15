@@ -1,15 +1,19 @@
-/** @type {import('next').NextConfig} */
+﻿/** @type {import('next').NextConfig} */
 const path = require('path');
 
 const nextConfig = {
+  output: 'standalone',
+
   typescript: {
     ignoreBuildErrors: true,
   },
+
   experimental: {
     serverActions: {
       bodySizeLimit: '50mb',
     },
   },
+
   webpack: (config) => {
     config.resolve.alias = {
       ...config.resolve.alias,
@@ -18,6 +22,7 @@ const nextConfig = {
     };
     return config;
   },
+
   images: {
     remotePatterns: [
       {
@@ -34,7 +39,9 @@ const nextConfig = {
       },
     ],
   },
+
   swcMinify: true,
   compress: true,
 }
+
 module.exports = nextConfig

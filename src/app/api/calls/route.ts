@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/db";
 import { sendCallNotification } from "@/lib/fcm";
 
@@ -85,22 +85,14 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // ========== FCM 푸시 알림 전송 (온라인/오프라인 모두) ==========
-    if (receiver.fcmToken) {
-      try {
-        await sendCallNotification(
-          receiver.fcmToken,
-          session.user.name || "사용자",
-          callType,
-          call.id,
-          chatRoomId
-        );
-        console.log(`✅ 통화 푸시 전송: ${receiver.name} (${receiver.isOnline ? 'Online' : 'Offline'})`);
-      } catch (error) {
-        console.error(`❌ 통화 푸시 실패 (${receiver.name}):`, error);
-      }
-    } else {
-      console.warn(`⚠️  FCM 토큰 없음: ${receiver.name}`);
+    // 푸시 알림 전송 (오프라인인 경우)
+    if (!receiver.isOnline && receiver.fcmToken) {
+      await sendCallNotification(
+        receiver.fcmToken,
+        session.user.name || "사용자",
+        callType,
+        call.id
+      );
     }
 
     return NextResponse.json(

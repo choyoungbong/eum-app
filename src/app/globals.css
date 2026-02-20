@@ -1,33 +1,58 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+
+:root {
+  --eum-purple: #7c3aed;
+  --eum-blue: #2563eb;
+  --eum-dark: #0f0c29;
+  --eum-glass: rgba(255, 255, 255, 0.06);
+  --eum-border: rgba(255, 255, 255, 0.12);
+}
 
 * {
   box-sizing: border-box;
   padding: 0;
   margin: 0;
-}
-
-html,
-body {
-  max-width: 100vw;
-  overflow-x: hidden;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-a {
-  color: inherit;
-  text-decoration: none;
+body {
+  font-family: 'Pretendard', -apple-system, sans-serif;
+  background-color: var(--eum-dark);
+  color: #ffffff;
+  overflow-x: hidden;
 }
 
-button {
-  cursor: pointer;
+/* 세련된 스크롤바 커스텀 */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--eum-dark);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(124, 58, 237, 0.3);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--eum-purple);
+}
+
+/* 전역 그라데이션 텍스트 클래스 */
+.text-eum-gradient {
+  background: linear-gradient(135deg, #a78bfa, #60a5fa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Glassmorphism 기본 클래스 */
+.eum-glass-effect {
+  background: var(--eum-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--eum-border);
 }

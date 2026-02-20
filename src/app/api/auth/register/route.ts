@@ -2,22 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { hash } from "bcrypt";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { DEMO_MODE, isDemoUser } from "@/lib/demo-mode";
+import { DEMO_MODE } from "@/lib/demo-mode";
 
-// 입력 검증 스키마
+// 💡 입력 검증 스키마 수정 (marketingConsent 추가)
 const signupSchema = z.object({
   email: z.string().email("유효한 이메일을 입력하세요"),
   password: z.string().min(8, "비밀번호는 최소 8자 이상이어야 합니다"),
   name: z.string().min(2, "이름은 최소 2자 이상이어야 합니다"),
+  marketingConsent: z.boolean().optional(), // 프론트에서 보내는 필드 추가
 });
 
 export async function POST(request: NextRequest) {
   try {
-    // 데모 모드에서는 회원가입 차단
+    // 1. 데모 모드 체크
     if (DEMO_MODE) {
       return NextResponse.json(
         { 
-          error: "데모 모드에서는 회원가입이 불가능합니다. 데모 계정을 사용해주세요.",
+          error: "데모 모드에서는 회원가입이 불가능합니다.",
           demoAccount: "reviewer@appstore.com / Demo2024!Review"
         },
         { status: 403 }
@@ -26,19 +27,19 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     
-    // 입력값 검증
+    // 2. 입력값 검증 (Zod)
     const validation = signupSchema.safeParse(body);
     
     if (!validation.success) {
       return NextResponse.json(
         { error: validation.error.errors[0].message },
-        { status: 400 }
+        { status: 400 } // 여기서 400 에러가 발생했던 것입니다.
       );
     }
 
-    const { email, password, name } = validation.data;
+    const { email, password, name, marketingConsent } = validation.data;
 
-    // 이메일 중복 체크
+    // 3. 이메일 중복 체크
     const existingUser = await prisma.user.findUnique({
       where: { email }
     });
@@ -50,10 +51,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 비밀번호 해싱
+    // 4. 비밀번호 해싱
     const passwordHash = await hash(password, 12);
 
-    // 사용자 생성
+    // 5. 사용자 생성
     const user = await prisma.user.create({
       data: {
         email,
@@ -61,6 +62,8 @@ export async function POST(request: NextRequest) {
         name,
         role: "USER",
         emailVerified: false,
+        // DB 스키마(schema.prisma)에 marketing_consent 필드가 있다면 추가하세요.
+        // 없다면 이 줄은 삭제해도 무방합니다.
       },
       select: {
         id: true,

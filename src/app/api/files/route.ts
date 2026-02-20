@@ -17,8 +17,11 @@ export async function GET(request: NextRequest) {
     const page = parseInt(searchParams.get("page") || "1");
     const limit = parseInt(searchParams.get("limit") || "20");
     const sortBy = searchParams.get("sortBy") || "createdAt";
-    const sortOrder = searchParams.get("sortOrder") || "desc";
+    const sortOrder = (searchParams.get("sortOrder") || "desc") as "asc" | "desc";
     
+    // [추가] 폴더 격리 핵심 파라미터
+    const folderId = searchParams.get("folderId"); // "null" 또는 "uuid"
+
     // 검색 & 필터
     const search = searchParams.get("search") || "";
     const fileType = searchParams.get("fileType") || "";
@@ -28,10 +31,22 @@ export async function GET(request: NextRequest) {
 
     const skip = (page - 1) * limit;
 
-    // 1. 내가 업로드한 파일 조회
+    /**
+     * ==========================================
+     * 1. 내 파일 조건 설정 (folderId 필터링 추가)
+     * ==========================================
+     */
     const myFilesWhere: any = {
       userId: session.user.id,
     };
+
+    // [핵심 수정] 폴더 격리 로직 주입
+    // folderId가 "null" 문자열로 오면 부모가 없는(홈) 파일만, ID가 오면 해당 폴더 파일만.
+    if (folderId === "null" || !folderId) {
+      myFilesWhere.folderId = null;
+    } else {
+      myFilesWhere.folderId = folderId;
+    }
 
     // 검색어 필터
     if (search) {
@@ -59,15 +74,15 @@ export async function GET(request: NextRequest) {
     // 날짜 범위 필터
     if (startDate || endDate) {
       myFilesWhere.createdAt = {};
-      if (startDate) {
-        myFilesWhere.createdAt.gte = new Date(startDate);
-      }
-      if (endDate) {
-        myFilesWhere.createdAt.lte = new Date(endDate);
-      }
+      if (startDate) myFilesWhere.createdAt.gte = new Date(startDate);
+      if (endDate) myFilesWhere.createdAt.lte = new Date(endDate);
     }
 
-    // 2. 공유받은 파일 조회 (관계 없이)
+    /**
+     * ==========================================
+     * 2. 공유받은 파일 조회 (공유는 폴더 격리에서 제외하거나 별도 처리)
+     * ==========================================
+     */
     const sharedResources = await prisma.sharedResource.findMany({
       where: {
         resourceType: "FILE",
@@ -75,163 +90,118 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // 공유받은 파일 ID 목록
     const sharedFileIds = sharedResources.map((sr) => sr.resourceId);
 
-    // 공유받은 파일 정보 조회
-    const sharedFilesData = await prisma.file.findMany({
-      where: {
-        id: { in: sharedFileIds },
-      },
+    // 공유받은 파일 상세 정보 (공유받은 파일은 폴더 경로와 상관없이 보여주는 것이 일반적)
+    const sharedFilesData = sharedFileIds.length > 0 
+      ? await prisma.file.findMany({
+          where: { id: { in: sharedFileIds } },
+          include: { 
+            user: { 
+              select: { id: true, name: true, email: true } 
+            },
+            fileTags: {
+              include: { tag: true }
+            }
+          }
+        })
+      : [];
+
+    const sharedFilesWithMeta = sharedFilesData.map((file) => {
+      const shareInfo = sharedResources.find((sr) => sr.resourceId === file.id);
+      return {
+        ...file,
+        size: file.size.toString(),
+        isShared: true,
+        isOwner: false,
+        sharedBy: file.user?.name,
+        sharedByEmail: file.user?.email,
+        sharedAt: shareInfo?.createdAt,
+        permission: shareInfo?.permission,
+      };
     });
 
-    // 각 공유 파일의 소유자 정보 조회
-    const sharedFilesWithOwner = await Promise.all(
-      sharedFilesData.map(async (file) => {
-        const owner = await prisma.user.findUnique({
-          where: { id: file.userId },
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        });
-
-        const shareInfo = sharedResources.find((sr) => sr.resourceId === file.id);
-
-        return {
-          ...file,
-          user: owner,
-          sharedBy: owner?.name,
-          sharedByEmail: owner?.email,
-          sharedAt: shareInfo?.createdAt,
-          permission: shareInfo?.permission,
-        };
-      })
-    );
-
-    // 3. 필터에 따라 조회
+    /**
+     * ==========================================
+     * 3. 필터 및 페이지네이션 처리
+     * ==========================================
+     */
     let myFiles: any[] = [];
     let totalMyFiles = 0;
-    let totalSharedFiles = sharedFilesWithOwner.length;
 
     if (filter === "all" || filter === "mine") {
-      // 내 파일 조회
       [myFiles, totalMyFiles] = await Promise.all([
         prisma.file.findMany({
           where: myFilesWhere,
           orderBy: { [sortBy]: sortOrder },
-          skip: filter === "mine" ? skip : 0,
+          // filter가 "all"일 때는 나중에 메모리에서 합치므로 skip/take를 여기서 하지 않음
+          skip: filter === "mine" ? skip : undefined,
           take: filter === "mine" ? limit : undefined,
-          select: {
-            id: true,
-            filename: true,
-            originalName: true,
-            size: true,
-            mimeType: true,
-            thumbnailUrl: true,
-            transcodeStatus: true,
-            createdAt: true,
-            updatedAt: true,
-          },
+          include: {
+            fileTags: {
+              include: { tag: true }
+            }
+          }
         }),
         prisma.file.count({ where: myFilesWhere }),
       ]);
     }
 
-    // 4. 결과 조합
-    let allFiles: any[] = [];
+    const myFilesWithMeta = myFiles.map((file) => ({
+      ...file,
+      size: file.size.toString(),
+      isShared: false,
+      isOwner: true,
+    }));
+
+    /**
+     * ==========================================
+     * 4. 최종 데이터 조합 및 정렬
+     * ==========================================
+     */
+    let resultFiles: any[] = [];
+    let finalTotal = 0;
 
     if (filter === "all") {
-      // 내 파일 + 공유받은 파일
-      const myFilesWithMeta = myFiles.map((file) => ({
-        ...file,
-        size: file.size.toString(),
-        isShared: false,
-        isOwner: true,
-      }));
-
-      const sharedFilesWithMeta = sharedFilesWithOwner.map((file) => ({
-        ...file,
-        size: file.size.toString(),
-        isShared: true,
-        isOwner: false,
-      }));
-
-      // 합치기
-      allFiles = [...myFilesWithMeta, ...sharedFilesWithMeta];
-
-      // 정렬
-      allFiles.sort((a, b) => {
-        const aValue = a[sortBy];
-        const bValue = b[sortBy];
-        
-        if (sortOrder === "desc") {
-          return aValue > bValue ? -1 : 1;
-        } else {
-          return aValue > bValue ? 1 : -1;
-        }
+      // 내 파일(현재 폴더 내) + 공유받은 파일 전체
+      const combined = [...myFilesWithMeta, ...sharedFilesWithMeta];
+      
+      // 정렬 로직
+      combined.sort((a: any, b: any) => {
+        const aVal = a[sortBy];
+        const bVal = b[sortBy];
+        return sortOrder === "desc" 
+          ? (aVal > bVal ? -1 : 1) 
+          : (aVal > bVal ? 1 : -1);
       });
 
-      // 페이지네이션
-      const startIndex = skip;
-      const endIndex = skip + limit;
-      allFiles = allFiles.slice(startIndex, endIndex);
-
+      finalTotal = combined.length;
+      resultFiles = combined.slice(skip, skip + limit);
     } else if (filter === "mine") {
-      // 내 파일만
-      allFiles = myFiles.map((file) => ({
-        ...file,
-        size: file.size.toString(),
-        isShared: false,
-        isOwner: true,
-      }));
-
-    } else if (filter === "shared") {
-      // 공유받은 파일만
-      allFiles = sharedFilesWithOwner.map((file) => ({
-        ...file,
-        size: file.size.toString(),
-        isShared: true,
-        isOwner: false,
-      }));
-
-      // 정렬
-      allFiles.sort((a, b) => {
-        const aValue = a[sortBy];
-        const bValue = b[sortBy];
-        
-        if (sortOrder === "desc") {
-          return aValue > bValue ? -1 : 1;
-        } else {
-          return aValue > bValue ? 1 : -1;
-        }
+      resultFiles = myFilesWithMeta;
+      finalTotal = totalMyFiles;
+    } else {
+      // shared 필터
+      sharedFilesWithMeta.sort((a: any, b: any) => {
+        const aVal = a[sortBy];
+        const bVal = b[sortBy];
+        return sortOrder === "desc" ? (aVal > bVal ? -1 : 1) : (aVal > bVal ? 1 : -1);
       });
-
-      // 페이지네이션
-      const startIndex = skip;
-      const endIndex = skip + limit;
-      allFiles = allFiles.slice(startIndex, endIndex);
+      finalTotal = sharedFilesWithMeta.length;
+      resultFiles = sharedFilesWithMeta.slice(skip, skip + limit);
     }
 
-    // 5. 총 개수 계산
-    const total = filter === "all" 
-      ? totalMyFiles + totalSharedFiles
-      : filter === "mine"
-      ? totalMyFiles
-      : totalSharedFiles;
-
     return NextResponse.json({
-      files: allFiles,
+      files: resultFiles,
       pagination: {
-        total,
+        total: finalTotal,
         page,
         limit,
-        totalPages: Math.ceil(total / limit),
+        totalPages: Math.ceil(finalTotal / limit),
       },
       stats: {
         myFiles: totalMyFiles,
-        sharedFiles: totalSharedFiles,
+        sharedFiles: sharedFilesWithMeta.length,
       },
     });
 

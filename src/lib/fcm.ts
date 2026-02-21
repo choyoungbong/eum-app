@@ -9,14 +9,25 @@ function initFirebase() {
   }
 
   const serviceAccountVar = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-  if (!serviceAccountVar) return false;
+  if (!serviceAccountVar) {
+    console.warn("⚠️ FIREBASE_SERVICE_ACCOUNT_KEY 가 환경변수에 설정되지 않았습니다.");
+    return false;
+  }
 
   try {
-    // 1. JSON 파싱 (양끝 따옴표 제거 후 파싱)
-    const configStr = serviceAccountVar.trim();
+    // 1. JSON 파싱 전처리 (Railway/Docker 환경 대응)
+    let configStr = serviceAccountVar.trim();
+    
+    // 따옴표로 감싸진 경우 제거 (환경변수 주입 방식에 따라 필요할 수 있음)
+    if (configStr.startsWith("'") && configStr.endsWith("'")) {
+      configStr = configStr.slice(1, -1);
+    } else if (configStr.startsWith('"') && configStr.endsWith('"')) {
+      configStr = configStr.slice(1, -1);
+    }
+
     const serviceAccount = JSON.parse(configStr);
 
-    // 2. private_key 내의 \n 문자열을 실제 줄바꿈으로 치환 (가장 핵심)
+    // 2. private_key 내의 \n 문자열을 실제 줄바꿈으로 치환
     if (serviceAccount.private_key) {
       serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
     }
@@ -34,13 +45,16 @@ function initFirebase() {
   }
 }
 
+// 초기화 실행
 initFirebase();
 
+/**
+ * 기본 푸시 알림 전송 함수
+ */
 export async function sendPushNotification(
   fcmToken: string,
   payload: { title: string; body: string; data?: Record<string, string> }
 ) {
-  // ✅ 전역 변수 체크
   if (!firebaseInitialized || admin.apps.length === 0) {
     console.error("❌ 알림 발송 실패: Firebase가 초기화되지 않았습니다.");
     return { success: false };
@@ -62,6 +76,9 @@ export async function sendPushNotification(
   }
 }
 
+/**
+ * 채팅 메시지 알림
+ */
 export async function sendChatMessageNotification(token: string, senderName: string, content: string, chatRoomId: string) {
   return sendPushNotification(token, {
     title: senderName,
@@ -70,11 +87,36 @@ export async function sendChatMessageNotification(token: string, senderName: str
   });
 }
 
+/**
+ * 파일 공유 알림
+ */
 export async function sendFileSharedNotification(token: string, senderName: string, fileName: string, chatRoomId: string) {
   return sendPushNotification(token, {
     title: `📎 ${senderName}님의 파일 공유`,
     body: fileName,
     data: { type: "file_shared", chatRoomId, click_action: `/chat/${chatRoomId}` },
+  });
+}
+
+/**
+ * ✅ [빌드 에러 해결] 통화 알림 함수 추가
+ */
+export async function sendCallNotification(
+  token: string, 
+  callerName: string, 
+  callType: "VOICE" | "VIDEO", 
+  callId: string
+) {
+  const typeText = callType === "VOICE" ? "음성 통화" : "영상 통화";
+  return sendPushNotification(token, {
+    title: `📞 ${typeText} 요청`,
+    body: `${callerName}님이 ${typeText}를 요청했습니다.`,
+    data: { 
+      type: "call_request", 
+      callId, 
+      callType, 
+      click_action: `/call/${callId}` 
+    },
   });
 }
 

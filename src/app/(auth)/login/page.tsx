@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -16,7 +16,7 @@ import {
   Search
 } from "lucide-react";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
@@ -25,7 +25,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // 회원가입 성공 후 리다이렉트 되었는지 확인
   const isSignupSuccess = searchParams.get("signup") === "success";
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -55,12 +54,12 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-[#0f0c29] text-white flex items-center justify-center p-6 relative overflow-hidden">
-      {/* 배경 장식 (Blobs) */}
+      {/* 배경 장식 */}
       <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-600/20 blur-[100px] rounded-full -z-10" />
       <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/20 blur-[100px] rounded-full -z-10" />
 
       <div className="max-w-md w-full">
-        {/* 로고 영역 */}
+        {/* 로고 */}
         <div className="text-center mb-10 flex flex-col items-center">
           <Link href="/" className="inline-flex items-center gap-3 mb-4 group">
             <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-blue-600 rounded-2xl flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform">
@@ -73,14 +72,13 @@ export default function LoginPage() {
           </Link>
         </div>
 
-        {/* 로그인 카드 */}
+        {/* 카드 */}
         <div className="bg-white/5 border border-white/10 p-8 rounded-[40px] backdrop-blur-2xl shadow-2xl relative">
           <div className="mb-8">
             <h2 className="text-2xl font-bold mb-2">로그인</h2>
             <p className="text-white/50 text-sm">이음에 오신 것을 환영합니다 👋</p>
           </div>
 
-          {/* 회원가입 성공 알림 */}
           {isSignupSuccess && !error && (
             <div className="mb-6 flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 p-4 rounded-2xl text-sm animate-fade-in">
               <AlertCircle size={18} />
@@ -88,7 +86,6 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* 에러 알림 */}
           {error && (
             <div className="mb-6 flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-2xl text-sm">
               <AlertCircle size={18} />
@@ -97,7 +94,6 @@ export default function LoginPage() {
           )}
 
           <form onSubmit={handleLogin} className="space-y-4">
-            {/* 이메일 입력 */}
             <div className="space-y-2">
               <label className="text-xs font-bold text-white/40 ml-1 uppercase tracking-wider">Email</label>
               <div className="relative group">
@@ -115,7 +111,6 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {/* 비밀번호 입력 */}
             <div className="space-y-2">
               <label className="text-xs font-bold text-white/40 ml-1 uppercase tracking-wider">Password</label>
               <div className="relative group">
@@ -140,7 +135,6 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {/* 아이디/비밀번호 찾기 (기존 로직 유지) */}
             <div className="flex justify-end gap-3 px-1">
               <Link href="/find-email" className="text-xs text-white/30 hover:text-purple-400 transition-colors flex items-center gap-1">
                 <Search size={12} />
@@ -152,7 +146,6 @@ export default function LoginPage() {
               </Link>
             </div>
 
-            {/* 로그인 버튼 */}
             <button
               type="submit"
               disabled={loading}
@@ -169,7 +162,6 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* 회원가입 링크 (경로: /register) */}
           <div className="mt-8 pt-8 border-t border-white/5 text-center">
             <p className="text-white/40 text-sm">
               아직 계정이 없으신가요?{" "}
@@ -185,5 +177,17 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-[#0f0c29] flex items-center justify-center">
+        <Loader2 size={40} className="animate-spin text-purple-500" />
+      </div>
+    }>
+      <LoginForm />
+    </Suspense>
   );
 }

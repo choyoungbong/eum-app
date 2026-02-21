@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { sendChatMessageNotification, sendFileSharedNotification } from "@/lib/fcm";
 
 // 메시지 목록 조회
 export async function GET(
@@ -20,9 +21,8 @@ export async function GET(
     const chatRoomId = params.id;
     const { searchParams } = new URL(request.url);
     const limit = parseInt(searchParams.get("limit") || "50");
-    const before = searchParams.get("before"); // 커서 기반 페이지네이션
+    const before = searchParams.get("before");
 
-    // 참여자 확인
     const membership = await prisma.chatRoomMember.findFirst({
       where: {
         chatRoomId,
@@ -37,7 +37,6 @@ export async function GET(
       );
     }
 
-    // 메시지 조회
     const messages = await prisma.chatMessage.findMany({
       where: {
         chatRoomId,
@@ -55,6 +54,7 @@ export async function GET(
             email: true,
           },
         },
+        file: true,
       },
       orderBy: {
         createdAt: "desc",
@@ -62,7 +62,6 @@ export async function GET(
       take: limit,
     });
 
-    // 역순으로 정렬 (오래된 것부터)
     const sortedMessages = messages.reverse();
 
     return NextResponse.json({
@@ -96,7 +95,6 @@ export async function POST(
     const body = await request.json();
     const { type, content, fileId } = body;
 
-    // 참여자 확인
     const membership = await prisma.chatRoomMember.findFirst({
       where: {
         chatRoomId,
@@ -111,7 +109,6 @@ export async function POST(
       );
     }
 
-    // 유효성 검사
     if (!type) {
       return NextResponse.json(
         { error: "메시지 타입을 지정하세요" },
@@ -133,7 +130,6 @@ export async function POST(
       );
     }
 
-    // 메시지 생성
     const message = await prisma.chatMessage.create({
       data: {
         chatRoomId,
@@ -150,24 +146,30 @@ export async function POST(
             email: true,
           },
         },
+        file: true,
       },
     });
 
-    // 파일 메시지인 경우 자동 공유 권한 부여
-    if (type === "FILE" && fileId) {
-      // 채팅방 멤버 조회
-      const members = await prisma.chatRoomMember.findMany({
-        where: {
-          chatRoomId,
-          userId: {
-            not: session.user.id, // 본인 제외
+    const members = await prisma.chatRoomMember.findMany({
+      where: {
+        chatRoomId,
+        userId: {
+          not: session.user.id,
+        },
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            fcmToken: true,
           },
         },
-      });
+      },
+    });
 
-      // 각 멤버에게 파일 읽기 권한 부여
+    if (type === "FILE" && fileId) {
       for (const member of members) {
-        // 이미 공유되었는지 확인
         const existingShare = await prisma.sharedResource.findFirst({
           where: {
             resourceType: "FILE",
@@ -190,11 +192,36 @@ export async function POST(
       }
     }
 
-    // 채팅방 업데이트 시간 갱신
     await prisma.chatRoom.update({
       where: { id: chatRoomId },
       data: { updatedAt: new Date() },
     });
+
+    // ========== FCM 푸시 알림 발송 ==========
+    for (const member of members) {
+      if (member.user.fcmToken) {
+        try {
+          if (type === "TEXT") {
+            await sendChatMessageNotification(
+              member.user.fcmToken,
+              session.user.name || "사용자",
+              content,
+              chatRoomId
+            );
+          } else if (type === "FILE" && message.file) {
+            await sendFileSharedNotification(
+              member.user.fcmToken,
+              session.user.name || "사용자",
+              message.file.originalName,
+              chatRoomId
+            );
+          }
+          console.log(`✅ 푸시 알림: ${member.user.name}`);
+        } catch (error) {
+          console.error(`❌ 푸시 실패 (${member.user.name}):`, error);
+        }
+      }
+    }
 
     return NextResponse.json(
       {

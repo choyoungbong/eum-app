@@ -95,7 +95,6 @@ export default function ChatPage() {
       return chatRoom.name || "그룹 채팅";
     }
 
-    // 1:1 채팅: 상대방 이름
     const otherMember = chatRoom.members.find(
       (member) => member.user.id !== session?.user?.id
     );
@@ -130,7 +129,7 @@ export default function ChatPage() {
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-4">
-              <h1 className="text-2xl font-bold">💬 채팅</h1>
+              <h1 className="text-2xl font-bold text-black">💬 채팅</h1>
               {isConnected && (
                 <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
                   ● 연결됨
@@ -138,12 +137,12 @@ export default function ChatPage() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              <Link href="/dashboard" className="text-blue-600 hover:text-blue-700">
+              <Link href="/dashboard" className="text-blue-600 hover:text-blue-700 font-medium">
                 ← 대시보드
               </Link>
               <button
                 onClick={() => setShowNewChatModal(true)}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-bold"
               >
                 + 새 채팅
               </button>
@@ -152,12 +151,12 @@ export default function ChatPage() {
         </div>
       </header>
 
-      {/* 메인 */}
+      {/* 메인 리스트 */}
       <main className="max-w-7xl mx-auto px-4 py-8">
         {loading ? (
-          <div className="text-center text-gray-500 py-8">로딩 중...</div>
+          <div className="text-center text-gray-500 py-8 font-medium">로딩 중...</div>
         ) : chatRooms.length === 0 ? (
-          <div className="bg-white shadow rounded-lg p-8 text-center">
+          <div className="bg-white shadow rounded-lg p-8 text-center border">
             <p className="text-gray-500 mb-4">채팅방이 없습니다</p>
             <button
               onClick={() => setShowNewChatModal(true)}
@@ -167,7 +166,7 @@ export default function ChatPage() {
             </button>
           </div>
         ) : (
-          <div className="bg-white shadow rounded-lg divide-y">
+          <div className="bg-white shadow rounded-lg divide-y border">
             {chatRooms.map((chatRoom) => (
               <Link
                 key={chatRoom.id}
@@ -203,16 +202,20 @@ export default function ChatPage() {
       {/* 새 채팅 모달 */}
       {showNewChatModal && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
-          onClick={() => setShowNewChatModal(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4 backdrop-blur-sm"
+          onClick={() => {
+            setShowNewChatModal(false);
+            setSearchResults([]);
+            setSearchQuery("");
+          }}
         >
           <div
-            className="bg-white rounded-lg shadow-xl max-w-md w-full p-6"
+            className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 animate-in zoom-in duration-200"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold mb-4">새 채팅 시작</h3>
+            <h3 className="text-lg font-bold mb-4 text-black">새 채팅 시작</h3>
 
-            {/* 사용자 검색 */}
+            {/* 🌟 사용자 검색 입력창 영역 (수정 포인트) 🌟 */}
             <div className="mb-4">
               <div className="flex gap-2">
                 <input
@@ -220,12 +223,20 @@ export default function ChatPage() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="이메일 또는 이름으로 검색"
-                  className="flex-1 px-3 py-2 border rounded-md"
+                  // 1. text-black 클래스 추가
+                  // 2. bg-gray-50으로 배경 대비 추가
+                  className="flex-1 px-4 py-2 border-2 border-gray-200 rounded-md outline-none focus:border-blue-500 text-black bg-gray-50"
+                  // 3. 인라인 스타일로 색상 완전 고정
+                  style={{ 
+                    color: "#000000", 
+                    backgroundColor: "#f9fafb",
+                    WebkitTextFillColor: "#000000" 
+                  }}
                   onKeyDown={(e) => e.key === "Enter" && searchUsers()}
                 />
                 <button
                   onClick={searchUsers}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-bold transition-colors shadow-sm"
                 >
                   검색
                 </button>
@@ -234,20 +245,23 @@ export default function ChatPage() {
 
             {/* 검색 결과 */}
             {searchResults.length > 0 && (
-              <div className="space-y-2 max-h-60 overflow-y-auto">
+              <div className="space-y-2 max-h-60 overflow-y-auto mb-4 p-1">
                 {searchResults.map((user) => (
                   <button
                     key={user.id}
                     onClick={() => createChatRoom(user.id)}
-                    className="w-full p-3 text-left border rounded-md hover:bg-gray-50 transition"
+                    className="w-full p-3 text-left border rounded-lg hover:bg-blue-50 transition border-gray-100 group"
                   >
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="font-medium">{user.name}</p>
+                        <p className="font-bold text-black group-hover:text-blue-700">{user.name}</p>
                         <p className="text-sm text-gray-500">{user.email}</p>
                       </div>
                       {user.isOnline && (
-                        <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-green-600 font-medium">온라인</span>
+                          <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                        </div>
                       )}
                     </div>
                   </button>
@@ -257,8 +271,12 @@ export default function ChatPage() {
 
             <div className="mt-4 flex justify-end">
               <button
-                onClick={() => setShowNewChatModal(false)}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md"
+                onClick={() => {
+                  setShowNewChatModal(false);
+                  setSearchResults([]);
+                  setSearchQuery("");
+                }}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-md font-medium transition-colors"
               >
                 닫기
               </button>

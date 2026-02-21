@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import { useEffect, useState, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useChatRoom } from "@/hooks/useSocket";
+import { registerFCMToken } from "@/lib/firebase"; // 경로 확인
 
 interface Message {
   id: string;
@@ -72,6 +73,14 @@ export default function ChatRoomPage() {
       markAsRead();
     }
   }, [chatRoomId, messages.length]);
+
+  useEffect(() => {
+    // 채팅방 진입 시 푸시 토큰 등록 시도
+    if (session) {
+      console.log("푸시 토큰 등록 시도 중...");
+      registerFCMToken();
+    }
+  }, [session]);
 
   const fetchChatRoom = async () => {
     try {

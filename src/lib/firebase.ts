@@ -38,7 +38,6 @@ export async function requestNotificationPermission(): Promise<string | null> {
   try {
     if (typeof window === "undefined") return null;
 
-    // 1. 권한 요청
     const permission = await Notification.requestPermission();
     if (permission !== "granted") {
       console.warn("⚠️ 알림 권한이 거부되었습니다.");
@@ -48,24 +47,32 @@ export async function requestNotificationPermission(): Promise<string | null> {
     const messaging = getFirebaseMessaging();
     if (!messaging) return null;
 
-    // 2. 서비스 워커 등록 확인 (매우 중요)
-    // 브라우저가 sw.js를 찾지 못하면 getToken이 무한 대기하거나 에러가 납니다.
+    // 1. 서비스 워커 등록 및 '준비' 상태 대기
+    // 경로가 정확히 /firebase-messaging-sw.js 인지 확인하세요.
     const registration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+    
+    // 서비스 워커가 활성화될 때까지 기다리는 로직 추가 (중요)
+    while (registration.active?.state !== 'activated') {
+      await new Promise(resolve => setTimeout(resolve, 100)); // 100ms씩 대기
+      if (registration.installing?.state === 'redundant') break; 
+    }
 
-    // 3. FCM 토큰 가져오기
+    console.log("✅ 서비스 워커 활성화 확인됨");
+
+    // 2. 토큰 가져오기 (registration 객체를 직접 전달)
     const token = await getToken(messaging, {
       vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
-      serviceWorkerRegistration: registration, // 명시적으로 등록된 SW 전달
+      serviceWorkerRegistration: registration,
     });
 
     if (token) {
+      console.log("✅ FCM 토큰 생성 성공:", token);
       return token;
-    } else {
-      console.error("❌ FCM 토큰을 가져올 수 없습니다. VAPID Key를 확인하세요.");
-      return null;
-    }
+    } 
+    
+    return null;
   } catch (error) {
-    console.error("FCM 토큰 요청 실패:", error);
+    console.error("❌ FCM 토큰 요청 실패:", error);
     return null;
   }
 }

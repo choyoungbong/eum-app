@@ -32,38 +32,28 @@ export default function ChatRoomPage() {
   const [callingType, setCallingType] = useState<"VOICE" | "VIDEO" | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { messages: socketMessages, sendMessage, startTyping, stopTyping, typingUsers } =
+  const { messages: socketMessages, sendMessage, startTyping, stopTyping } =
     useChatRoom(chatRoomId);
 
-  // 1. 인증 및 푸시 토큰 등록
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/login");
     }
     if (session) {
-      console.log("🚀 FCM 토큰 등록 및 리스너 활성화...");
       registerFCMToken();
-
-      // 포그라운드(앱 실행 중) 알림 수신 처리
       const unsubscribe = onForegroundMessage((payload) => {
-        console.log("📬 실시간 알림 수신:", payload);
-        
-        // 만약 전화 요청 신호라면 즉시 대응
         if (payload.data?.type === 'call_request' || payload.data?.type === 'incoming_call') {
           const callId = payload.data.callId;
           const callerName = payload.notification?.title || "누군가";
-          
           if (window.confirm(`${callerName}님에게 전화가 왔습니다. 받으시겠습니까?`)) {
             router.push(`/call/${callId}`);
           }
         }
       });
-
       return () => unsubscribe();
     }
   }, [session, status, router]);
 
-  // 2. 초기 데이터 페칭 (채팅방 정보 및 기존 메시지)
   useEffect(() => {
     if (session && chatRoomId) {
       fetchChatRoom();
@@ -71,7 +61,6 @@ export default function ChatRoomPage() {
     }
   }, [session, chatRoomId]);
 
-  // 3. 소켓 메시지 중복 필터링 및 병합
   useEffect(() => {
     if (socketMessages.length > 0) {
       setMessages((prev) => {
@@ -83,7 +72,6 @@ export default function ChatRoomPage() {
     }
   }, [socketMessages]);
 
-  // 4. UI 제어 (스크롤 및 읽음 처리)
   useEffect(() => {
     scrollToBottom();
     if (chatRoomId && messages.length > 0) {
@@ -137,19 +125,13 @@ export default function ChatRoomPage() {
     const otherMember = getOtherMember();
     if (!otherMember) return alert("상대방을 찾을 수 없습니다.");
     if (callingType) return;
-
     setCallingType(callType);
     try {
       const res = await fetch("/api/calls", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chatRoomId,
-          receiverId: otherMember.user.id,
-          callType,
-        }),
+        body: JSON.stringify({ chatRoomId, receiverId: otherMember.user.id, callType }),
       });
-
       if (res.ok) {
         const data = await res.json();
         router.push(`/call/${data.call.id}`);
@@ -168,11 +150,8 @@ export default function ChatRoomPage() {
     e.preventDefault();
     const trimmedMessage = inputMessage.trim();
     if (!trimmedMessage || isSending) return;
-
     setIsSending(true);
     setInputMessage("");
-
-    // 낙관적 업데이트
     const tempId = crypto.randomUUID();
     const optimisticMessage: Message = {
       id: tempId,
@@ -182,17 +161,15 @@ export default function ChatRoomPage() {
       createdAt: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, optimisticMessage]);
-
     try {
       const res = await fetch(`/api/chat/rooms/${chatRoomId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "TEXT", content: trimmedMessage }),
       });
-
       if (res.ok) {
         const { data } = await res.json();
-        sendMessage(data); // 소켓 전송
+        sendMessage(data);
         setMessages((prev) => prev.map((msg) => (msg.id === tempId ? data : msg)));
       } else {
         throw new Error();
@@ -230,34 +207,35 @@ export default function ChatRoomPage() {
   if (!session || !chatRoom) return null;
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    // overflow-x-hidden으로 가로 밀림 방지
+    <div className="flex flex-col h-screen bg-gray-50 overflow-x-hidden">
       {/* 헤더 */}
-      <header className="bg-white shadow-sm border-b sticky top-0 z-10">
+      <header className="bg-white shadow-sm border-b sticky top-0 z-10 w-full">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link href="/chat" className="text-blue-600 text-sm font-medium">← 뒤로</Link>
             <div className="relative">
-              <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold">
+              <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-sm">
                 {getChatRoomName().charAt(0).toUpperCase()}
               </div>
               {chatRoom.type === "DIRECT" && (
                 <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white ${getOtherMember()?.user.isOnline ? "bg-green-500" : "bg-gray-400"}`} />
               )}
             </div>
-            <div>
-              <h1 className="text-base font-semibold text-gray-900">{getChatRoomName()}</h1>
-              <p className="text-xs text-gray-400">
+            <div className="min-w-0">
+              <h1 className="text-sm md:text-base font-semibold text-gray-900 truncate">{getChatRoomName()}</h1>
+              <p className="text-[10px] text-gray-400">
                 {chatRoom.type === "DIRECT" ? (getOtherMember()?.user.isOnline ? "온라인" : "오프라인") : `${chatRoom.members.length}명 참여 중`}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
             {chatRoom.type === "DIRECT" && (
               <>
-                <button onClick={() => handleStartCall("VOICE")} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 hover:bg-green-100 hover:text-green-600 transition">
+                <button onClick={() => handleStartCall("VOICE")} className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-600 hover:bg-green-100 hover:text-green-600 transition">
                   <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 011 1V20a1 1 0 01-1 1C10.29 21 3 13.71 3 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.46.57 3.58a1 1 0 01-.25 1.01l-2.2 2.2z"/></svg>
                 </button>
-                <button onClick={() => handleStartCall("VIDEO")} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 hover:bg-blue-100 hover:text-blue-600 transition">
+                <button onClick={() => handleStartCall("VIDEO")} className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-600 hover:bg-blue-100 hover:text-blue-600 transition">
                   <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1v-3.5l4 4v-11l-4 4z"/></svg>
                 </button>
               </>
@@ -266,17 +244,17 @@ export default function ChatRoomPage() {
         </div>
       </header>
 
-      {/* 메시지 영역 */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      {/* 메시지 영역: 하단 입력창 높이(약 80px)만큼 padding-bottom 확보 */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-24">
         {messages.map((message, index) => {
           const isMyMessage = message.sender.id === session.user.id;
           return (
             <div key={message.id} className={`flex ${isMyMessage ? "justify-end" : "justify-start"}`}>
-              <div className={`max-w-[75%] flex flex-col ${isMyMessage ? "items-end" : "items-start"}`}>
+              <div className={`max-w-[85%] flex flex-col ${isMyMessage ? "items-end" : "items-start"}`}>
                 {!isMyMessage && (index === 0 || messages[index-1].sender.id !== message.sender.id) && (
-                  <span className="text-xs text-gray-500 mb-1 px-1">{message.sender.name}</span>
+                  <span className="text-[11px] text-gray-500 mb-1 px-1">{message.sender.name}</span>
                 )}
-                <div className={`px-4 py-2 rounded-2xl shadow-sm text-sm ${isMyMessage ? "bg-blue-600 text-white rounded-tr-none" : "bg-white border text-gray-900 rounded-tl-none"}`}>
+                <div className={`px-4 py-2 rounded-2xl shadow-sm text-sm break-all ${isMyMessage ? "bg-blue-600 text-white rounded-tr-none" : "bg-white border text-gray-900 rounded-tl-none"}`}>
                   {message.content}
                 </div>
               </div>
@@ -286,18 +264,22 @@ export default function ChatRoomPage() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 입력 영역 */}
-      <div className="bg-white border-t p-4">
-        <form onSubmit={handleSendMessage} className="max-w-7xl mx-auto flex gap-2">
+      {/* 입력 영역: 하단에 고정하고 가로 너비를 꽉 채움 */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t p-3 pb-safe-area-inset-bottom">
+        <form onSubmit={handleSendMessage} className="flex items-center gap-2 max-w-7xl mx-auto">
           <input
             type="text"
             value={inputMessage}
             onChange={handleInputChange}
             disabled={isSending}
-            placeholder="메시지를 입력하세요..."
-            className="flex-1 px-4 py-3 border rounded-full focus:ring-2 focus:ring-blue-500 outline-none text-gray-900"
+            placeholder="메시지 입력..."
+            className="flex-1 min-w-0 px-4 py-2.5 border rounded-full focus:ring-2 focus:ring-blue-500 outline-none text-sm text-gray-900 bg-gray-50"
           />
-          <button type="submit" disabled={!inputMessage.trim() || isSending} className="px-6 py-2 bg-blue-600 text-white rounded-full font-bold">
+          <button 
+            type="submit" 
+            disabled={!inputMessage.trim() || isSending} 
+            className="flex-shrink-0 px-5 py-2.5 bg-blue-600 text-white rounded-full font-bold text-sm disabled:bg-gray-300 transition-colors"
+          >
             {isSending ? "..." : "전송"}
           </button>
         </form>

@@ -2,7 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import { useRouter, useParams } from "next/navigation";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useChatRoom } from "@/hooks/useSocket";
 
@@ -27,18 +27,21 @@ export default function ChatRoomPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
   const [loading, setLoading] = useState(true);
+  const [isSending, setIsSending] = useState(false); // 전송 중 상태 추가
   const [callingType, setCallingType] = useState<"VOICE" | "VIDEO" | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { messages: socketMessages, sendMessage, startTyping, stopTyping, typingUsers } =
     useChatRoom(chatRoomId);
 
+  // 인증 체크
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/login");
     }
   }, [status, router]);
 
+  // 초기 데이터 페칭
   useEffect(() => {
     if (session && chatRoomId) {
       fetchChatRoom();
@@ -46,16 +49,24 @@ export default function ChatRoomPage() {
     }
   }, [session, chatRoomId]);
 
+  // ✅ 개선 1: 소켓 메시지 중복 필터링 및 병합
   useEffect(() => {
     if (socketMessages.length > 0) {
-      setMessages((prev) => [...prev, ...socketMessages]);
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map((m) => m.id));
+        const newMessages = socketMessages.filter((m) => !existingIds.has(m.id));
+        if (newMessages.length === 0) return prev;
+        return [...prev, ...newMessages];
+      });
     }
   }, [socketMessages]);
 
+  // 스크롤 제어
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
+  // 읽음 표시
   useEffect(() => {
     if (chatRoomId && messages.length > 0) {
       markAsRead();
@@ -143,9 +154,29 @@ export default function ChatRoomPage() {
     }
   };
 
+  // ✅ 개선 2: 낙관적 업데이트 및 중복 전송 방지 로직
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputMessage.trim()) return;
+    const trimmedMessage = inputMessage.trim();
+    if (!trimmedMessage || isSending) return;
+
+    setIsSending(true);
+    setInputMessage(""); // 입력창 즉시 비움 (UX 개선)
+
+    // 낙관적 메시지 (서버 응답 전 UI에 먼저 표시)
+    const tempId = crypto.randomUUID();
+    const optimisticMessage: Message = {
+      id: tempId,
+      type: "TEXT",
+      content: trimmedMessage,
+      sender: {
+        id: session!.user.id,
+        name: session!.user.name || "나",
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, optimisticMessage]);
 
     try {
       const res = await fetch(`/api/chat/rooms/${chatRoomId}/messages`, {
@@ -153,19 +184,31 @@ export default function ChatRoomPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "TEXT",
-          content: inputMessage.trim(),
+          content: trimmedMessage,
         }),
       });
 
       if (res.ok) {
-        const data = await res.json();
-        sendMessage(data.data);
-        setInputMessage("");
+        const { data } = await res.json();
+        
+        // 소켓으로 메시지 브로드캐스팅
+        sendMessage(data);
+        
+        // 낙관적 메시지를 실제 데이터로 교체 (ID 매칭)
+        setMessages((prev) =>
+          prev.map((msg) => (msg.id === tempId ? data : msg))
+        );
       } else {
-        alert("메시지 전송 실패");
+        throw new Error("전송 실패");
       }
     } catch (err) {
-      alert("메시지 전송 중 오류가 발생했습니다");
+      // 실패 시 화면에서 낙관적 메시지 제거 및 복구
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+      setInputMessage(trimmedMessage);
+      alert("메시지 전송에 실패했습니다.");
+    } finally {
+      setIsSending(false);
+      stopTyping();
     }
   };
 
@@ -190,11 +233,15 @@ export default function ChatRoomPage() {
   };
 
   const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString("ko-KR", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleTimeString("ko-KR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (e) {
+      return "";
+    }
   };
 
   if (status === "loading" || loading) {
@@ -213,8 +260,7 @@ export default function ChatRoomPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-
-      {/* ===== 헤더 ===== */}
+      {/* 헤더 */}
       <header className="bg-white shadow-sm border-b sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
@@ -274,7 +320,7 @@ export default function ChatRoomPage() {
         </div>
       </header>
 
-      {/* ===== 메시지 영역 ===== */}
+      {/* 메시지 영역 */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.map((message, index) => {
           const isMyMessage = message.sender.id === session.user.id;
@@ -320,7 +366,7 @@ export default function ChatRoomPage() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* ===== 입력 영역 ===== */}
+      {/* 입력 영역 */}
       <div className="bg-white border-t p-4 sticky bottom-0">
         <form onSubmit={handleSendMessage} className="max-w-7xl mx-auto flex gap-2">
           <input
@@ -328,16 +374,16 @@ export default function ChatRoomPage() {
             value={inputMessage}
             onChange={handleInputChange}
             onBlur={stopTyping}
-            placeholder="메시지를 입력하세요..."
-            // text-gray-900 클래스를 추가하여 글자가 검정색으로 보이게 함
-            className="flex-1 px-4 py-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white placeholder-gray-400 transition-all"
+            disabled={isSending}
+            placeholder={isSending ? "전송 중..." : "메시지를 입력하세요..."}
+            className="flex-1 px-4 py-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white placeholder-gray-400 transition-all disabled:bg-gray-50"
           />
           <button
             type="submit"
-            disabled={!inputMessage.trim()}
+            disabled={!inputMessage.trim() || isSending}
             className="px-6 py-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-bold shadow-md"
           >
-            전송
+            {isSending ? "..." : "전송"}
           </button>
         </form>
       </div>

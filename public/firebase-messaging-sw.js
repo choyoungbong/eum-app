@@ -1,44 +1,44 @@
 // Firebase Cloud Messaging Service Worker
-// 파일 위치: public/firebase-messaging-sw.js
-
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-messaging-compat.js');
 
-// Firebase 설정
-// 이 값들은 환경 변수에서 가져올 수 없으므로 직접 입력해야 합니다
-// Firebase Console > 프로젝트 설정 > 일반 > 웹 앱에서 확인
-firebase.initializeApp({
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
-});
+// ✅ 입력하신 Firebase 설정값 적용
+const firebaseConfig = {
+  apiKey: "AIzaSyDX5C589FJTRt7eSEEyBTYOhy3zOt61rww",
+  authDomain: "personal-cloud-ca830.firebaseapp.com",
+  projectId: "personal-cloud-ca830",
+  storageBucket: "personal-cloud-ca830.firebasestorage.app",
+  messagingSenderId: "531266228781",
+  appId: "1:531266228781:web:7d2debc260ee30b1285ea4"
+};
 
+firebase.initializeApp(firebaseConfig);
 const messaging = firebase.messaging();
 
 // 백그라운드 메시지 수신
 messaging.onBackgroundMessage((payload) => {
-  console.log('[firebase-messaging-sw.js] 백그라운드 메시지:', payload);
+  console.log('[sw.js] 백그라운드 메시지:', payload);
 
   const notificationTitle = payload.notification?.title || '새 메시지';
   const notificationOptions = {
     body: payload.notification?.body || '',
-    icon: '/icon-192x192.png', // 앱 아이콘
+    icon: '/icon-192x192.png',
     badge: '/badge-72x72.png',
     data: payload.data,
+    // 동일 채팅방 알림은 하나로 묶어 사용자 피로도를 줄임
     tag: payload.data?.chatRoomId || 'default',
-    requireInteraction: payload.data?.type === 'incoming_call', // 통화는 자동으로 닫히지 않음
+    renotify: true,
+    vibrate: [200, 100, 200],
   };
 
-  // 통화 알림인 경우 추가 옵션
-  if (payload.data?.type === 'incoming_call') {
+  // 통화 알림(incoming_call) 또는 호출 요청(call_request) 처리
+  if (payload.data?.type === 'incoming_call' || payload.data?.type === 'call_request') {
+    notificationOptions.requireInteraction = true; // 사용자가 응답할 때까지 유지
     notificationOptions.actions = [
-      { action: 'accept', title: '수락' },
-      { action: 'reject', title: '거절' },
+      { action: 'accept', title: '✅ 수락' },
+      { action: 'reject', title: '❌ 거절' },
     ];
-    notificationOptions.vibrate = [200, 100, 200, 100, 200];
+    notificationOptions.vibrate = [500, 100, 500, 100, 500];
   }
 
   self.registration.showNotification(notificationTitle, notificationOptions);
@@ -46,33 +46,54 @@ messaging.onBackgroundMessage((payload) => {
 
 // 알림 클릭 처리
 self.addEventListener('notificationclick', (event) => {
-  console.log('[Service Worker] 알림 클릭:', event);
   event.notification.close();
-
   const data = event.notification.data;
 
-  // 통화 알림 액션 처리
-  if (data?.type === 'incoming_call') {
-    if (event.action === 'accept') {
-      // 통화 수락 페이지로 이동
+  // 1. 통화 수락/거절 액션 버튼 처리
+  if (event.action === 'accept') {
+    const callUrl = `/call/${data.callId}?action=accept`;
+    event.waitUntil(focusOrOpenWindow(callUrl));
+    return;
+  } 
+  
+  if (event.action === 'reject') {
+    if (data.callId) {
       event.waitUntil(
-        clients.openWindow(`/call/${data.callId}?action=accept`)
+        fetch('/api/calls/reject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callId: data.callId }),
+        })
       );
-    } else if (event.action === 'reject') {
-      // 통화 거절 API 호출 (백그라운드)
-      fetch('/api/calls/reject', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ callId: data.callId }),
-      });
     }
     return;
   }
 
-  // 채팅 메시지 알림 - 채팅방으로 이동
+  // 2. 일반 알림 클릭 시 이동 경로 설정
+  let targetUrl = '/chat';
   if (data?.chatRoomId) {
-    event.waitUntil(
-      clients.openWindow(`/chat/${data.chatRoomId}`)
-    );
+    targetUrl = `/chat/${data.chatRoomId}`;
+  } else if (data?.callId) {
+    targetUrl = `/call/${data.callId}`;
   }
+
+  event.waitUntil(focusOrOpenWindow(targetUrl));
 });
+
+/**
+ * 중복 탭 방지: 이미 열린 창이 있으면 포커스, 없으면 새 창
+ */
+async function focusOrOpenWindow(url) {
+  const windowClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+  
+  for (let client of windowClients) {
+    // 상대 경로 포함 여부 확인
+    if (client.url.includes(url) && 'focus' in client) {
+      return client.focus();
+    }
+  }
+  
+  if (clients.openWindow) {
+    return clients.openWindow(url);
+  }
+}

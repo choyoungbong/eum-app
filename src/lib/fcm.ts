@@ -15,10 +15,8 @@ function initFirebase() {
   }
 
   try {
-    // 1. JSON 파싱 전처리 (Railway/Docker 환경 대응)
     let configStr = serviceAccountVar.trim();
     
-    // 따옴표로 감싸진 경우 제거 (환경변수 주입 방식에 따라 필요할 수 있음)
     if (configStr.startsWith("'") && configStr.endsWith("'")) {
       configStr = configStr.slice(1, -1);
     } else if (configStr.startsWith('"') && configStr.endsWith('"')) {
@@ -27,7 +25,6 @@ function initFirebase() {
 
     const serviceAccount = JSON.parse(configStr);
 
-    // 2. private_key 내의 \n 문자열을 실제 줄바꿈으로 치환
     if (serviceAccount.private_key) {
       serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
     }
@@ -49,13 +46,14 @@ function initFirebase() {
 initFirebase();
 
 /**
- * 기본 푸시 알림 전송 함수
+ * 기본 푸시 알림 전송 함수 (개선됨)
  */
 export async function sendPushNotification(
   fcmToken: string,
   payload: { title: string; body: string; data?: Record<string, string> }
 ) {
-  if (!firebaseInitialized || admin.apps.length === 0) {
+  // 매번 전송 전 초기화 상태 확인
+  if (!firebaseInitialized && !initFirebase()) {
     console.error("❌ 알림 발송 실패: Firebase가 초기화되지 않았습니다.");
     return { success: false };
   }
@@ -63,14 +61,48 @@ export async function sendPushNotification(
   try {
     const message: admin.messaging.Message = {
       token: fcmToken,
-      notification: { title: payload.title, body: payload.body },
+      // 1. 공통 알림 설정
+      notification: { 
+        title: payload.title, 
+        body: payload.body 
+      },
+      // 2. 데이터 페이로드 (Service Worker에서 읽음)
       data: payload.data || {},
-      android: { priority: "high", notification: { sound: "default" } },
-      apns: { payload: { aps: { sound: "default", badge: 1 } } },
+      // 3. Android 설정
+      android: { 
+        priority: "high", 
+        notification: { sound: "default", clickAction: "FLUTTER_NOTIFICATION_CLICK" } 
+      },
+      // 4. iOS 설정
+      apns: { 
+        payload: { aps: { sound: "default", badge: 1 } } 
+      },
+      // 5. 웹 푸시 설정 (중요: 웹 브라우저에서의 동작 최적화)
+      webpush: {
+        headers: {
+          Urgency: "high",
+        },
+        notification: {
+          title: payload.title,
+          body: payload.body,
+          icon: "/icon-192x192.png",
+          badge: "/badge-72x72.png",
+          requireInteraction: payload.data?.type === "call_request", // 통화는 수동으로 닫을 때까지 유지
+        },
+        fcmOptions: {
+          // 웹 푸시 클릭 시 이동할 URL (상대 경로가 아닌 전체 URL 권장되나 환경에 따라 조절)
+          link: payload.data?.click_action || "/chat",
+        },
+      },
     };
+
     const response = await admin.messaging().send(message);
     return { success: true, messageId: response };
-  } catch (error) {
+  } catch (error: any) {
+    // 만약 토큰이 유효하지 않다면 (사용자가 로그아웃했거나 앱 삭제) 에러 로그 출력
+    if (error.code === 'messaging/registration-token-not-registered') {
+      console.warn("⚠️ 유효하지 않은 FCM 토큰입니다. DB에서 제거가 필요할 수 있습니다.");
+    }
     console.error("❌ 푸시 알림 발송 에러:", error);
     return { success: false, error };
   }
@@ -82,8 +114,12 @@ export async function sendPushNotification(
 export async function sendChatMessageNotification(token: string, senderName: string, content: string, chatRoomId: string) {
   return sendPushNotification(token, {
     title: senderName,
-    body: content && content.length > 50 ? content.slice(0, 50) + "..." : content || "새 메시지가 도착했습니다.",
-    data: { type: "chat_message", chatRoomId, click_action: `/chat/${chatRoomId}` },
+    body: (content && content.length > 50) ? content.slice(0, 50) + "..." : content || "새 메시지가 도착했습니다.",
+    data: { 
+      type: "chat_message", 
+      chatRoomId, 
+      click_action: `/chat/${chatRoomId}` 
+    },
   });
 }
 
@@ -94,12 +130,16 @@ export async function sendFileSharedNotification(token: string, senderName: stri
   return sendPushNotification(token, {
     title: `📎 ${senderName}님의 파일 공유`,
     body: fileName,
-    data: { type: "file_shared", chatRoomId, click_action: `/chat/${chatRoomId}` },
+    data: { 
+      type: "file_shared", 
+      chatRoomId, 
+      click_action: `/chat/${chatRoomId}` 
+    },
   });
 }
 
 /**
- * ✅ [빌드 에러 해결] 통화 알림 함수 추가
+ * 통화 알림 함수
  */
 export async function sendCallNotification(
   token: string, 

@@ -7,7 +7,7 @@ const next = require("next");
 const { Server } = require("socket.io");
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = "0.0.0.0";  // ← localhost → 0.0.0.0 으로 변경!
+const hostname = "0.0.0.0";
 const port = parseInt(process.env.PORT || "3000", 10);
 
 const app = next({ dev, hostname, port });
@@ -47,6 +47,10 @@ app.prepare().then(() => {
     pingInterval: 25000,
   });
 
+  // 🌟 [핵심 수정] API Route(route.ts)에서 소켓을 사용할 수 있도록 전역 객체에 등록
+  global.io = io;
+  console.log("✅ Socket.IO registered to global.io");
+
   // Socket.IO 미들웨어 - 인증
   io.use((socket, next) => {
     const userId = socket.handshake.auth.userId;
@@ -69,135 +73,88 @@ app.prepare().then(() => {
 
     // ==================== 채팅방 입장 ====================
     socket.on("chat:join", (chatRoomId) => {
+      // 🌟 클라이언트 useSocket.ts와 동일하게 'chat:ID' 형식으로 join
       socket.join(`chat:${chatRoomId}`);
-      console.log(`📥 User ${socket.userId} joined chat ${chatRoomId}`);
+      console.log(`📥 User ${socket.userId} joined room: chat:${chatRoomId}`);
     });
 
     // ==================== 채팅방 퇴장 ====================
     socket.on("chat:leave", (chatRoomId) => {
       socket.leave(`chat:${chatRoomId}`);
-      console.log(`📤 User ${socket.userId} left chat ${chatRoomId}`);
+      console.log(`📤 User ${socket.userId} left room: chat:${chatRoomId}`);
     });
 
-    // ==================== 메시지 전송 ====================
+    // ==================== 메시지 전송 (소켓 직접 전송 시) ====================
     socket.on("message:send", (data) => {
       const { chatRoomId, message } = data;
-      
-      // 같은 채팅방에 있는 모든 사용자에게 전송
+      // API를 통하지 않고 소켓으로 직접 보낼 때 사용하는 로직
       io.to(`chat:${chatRoomId}`).emit("message:new", message);
-      
-      console.log(`💬 Message sent to chat ${chatRoomId}`);
+      console.log(`💬 Message broadcasted to chat:${chatRoomId}`);
     });
 
-    // ==================== 타이핑 중 ====================
+    // ==================== 타이핑/읽음/통화 로직 (기존 유지) ====================
     socket.on("typing:start", (data) => {
       const { chatRoomId } = data;
-      socket.to(`chat:${chatRoomId}`).emit("typing:user", {
-        userId: socket.userId,
-        chatRoomId,
-      });
+      socket.to(`chat:${chatRoomId}`).emit("typing:user", { userId: socket.userId, chatRoomId });
     });
 
     socket.on("typing:stop", (data) => {
       const { chatRoomId } = data;
-      socket.to(`chat:${chatRoomId}`).emit("typing:stop", {
-        userId: socket.userId,
-        chatRoomId,
-      });
+      socket.to(`chat:${chatRoomId}`).emit("typing:stop", { userId: socket.userId, chatRoomId });
     });
 
-    // ==================== 읽음 표시 ====================
     socket.on("message:read", (data) => {
       const { chatRoomId, messageId } = data;
-      socket.to(`chat:${chatRoomId}`).emit("message:read", {
-        userId: socket.userId,
-        chatRoomId,
-        messageId,
-      });
+      socket.to(`chat:${chatRoomId}`).emit("message:read", { userId: socket.userId, chatRoomId, messageId });
     });
 
-    // ==================== 통화 시그널링 ====================
-    
-    // 통화 요청
     socket.on("call:request", (data) => {
       const { receiverId, chatRoomId, callType, offer } = data;
       const receiverSocketId = onlineUsers.get(receiverId);
-      
       if (receiverSocketId) {
-        io.to(receiverSocketId).emit("call:incoming", {
-          callerId: socket.userId,
-          chatRoomId,
-          callType,
-          offer,
-        });
-        console.log(`📞 Call request from ${socket.userId} to ${receiverId}`);
+        io.to(receiverSocketId).emit("call:incoming", { callerId: socket.userId, chatRoomId, callType, offer });
       } else {
         socket.emit("call:failed", { reason: "User offline" });
       }
     });
 
-    // 통화 수락
     socket.on("call:accept", (data) => {
       const { callerId, answer } = data;
       const callerSocketId = onlineUsers.get(callerId);
-      
       if (callerSocketId) {
-        io.to(callerSocketId).emit("call:accepted", {
-          receiverId: socket.userId,
-          answer,
-        });
-        console.log(`✅ Call accepted by ${socket.userId}`);
+        io.to(callerSocketId).emit("call:accepted", { receiverId: socket.userId, answer });
       }
     });
 
-    // 통화 거절
     socket.on("call:reject", (data) => {
       const { callerId } = data;
       const callerSocketId = onlineUsers.get(callerId);
-      
       if (callerSocketId) {
-        io.to(callerSocketId).emit("call:rejected", {
-          receiverId: socket.userId,
-        });
-        console.log(`❌ Call rejected by ${socket.userId}`);
+        io.to(callerSocketId).emit("call:rejected", { receiverId: socket.userId });
       }
     });
 
-    // 통화 종료
     socket.on("call:end", (data) => {
       const { otherUserId } = data;
       const otherSocketId = onlineUsers.get(otherUserId);
-      
       if (otherSocketId) {
-        io.to(otherSocketId).emit("call:ended", {
-          userId: socket.userId,
-        });
+        io.to(otherSocketId).emit("call:ended", { userId: socket.userId });
       }
-      console.log(`📴 Call ended by ${socket.userId}`);
     });
 
-    // ICE Candidate 교환
     socket.on("call:ice-candidate", (data) => {
       const { otherUserId, candidate } = data;
       const otherSocketId = onlineUsers.get(otherUserId);
-      
       if (otherSocketId) {
-        io.to(otherSocketId).emit("call:ice-candidate", {
-          userId: socket.userId,
-          candidate,
-        });
+        io.to(otherSocketId).emit("call:ice-candidate", { userId: socket.userId, candidate });
       }
     });
 
     // ==================== 연결 해제 ====================
     socket.on("disconnect", () => {
       console.log(`❌ User disconnected: ${socket.userId} (${socket.id})`);
-      
-      // 온라인 상태 제거
       onlineUsers.delete(socket.userId);
       userSockets.delete(socket.id);
-      
-      // 오프라인 상태 브로드캐스트
       io.emit("user:offline", { userId: socket.userId });
     });
   });
@@ -206,9 +163,9 @@ app.prepare().then(() => {
   httpServer.listen(port, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║   🚀 Server ready!                     ║
-║   📡 Socket.IO enabled                 ║
-║   🌐 http://${hostname}:${port}             ║
+║    🚀 Server ready!                    ║
+║    📡 Socket.IO enabled                ║
+║    🌐 http://${hostname}:${port}             ║
 ╚════════════════════════════════════════╝
     `);
   });

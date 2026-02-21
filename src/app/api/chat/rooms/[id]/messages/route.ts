@@ -4,50 +4,45 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { sendChatMessageNotification, sendFileSharedNotification } from "@/lib/fcm";
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+// BigInt 변환 및 JSON 안전 처리를 위한 헬퍼 함수
+function serialize(data: any) {
+  return JSON.parse(
+    JSON.stringify(data, (key, value) =>
+      typeof value === "bigint" ? value.toString() : value
+    )
+  );
+}
+
+export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) return NextResponse.json({ error: "인증 필요" }, { status: 401 });
 
-    const chatRoomId = params.id;
-    const { searchParams } = new URL(request.url);
-    const limit = parseInt(searchParams.get("limit") || "50");
-    const before = searchParams.get("before");
-
     const messages = await prisma.chatMessage.findMany({
-      where: {
-        chatRoomId,
-        ...(before && { createdAt: { lt: new Date(before) } }),
-      },
+      where: { chatRoomId: params.id },
       include: {
         sender: { select: { id: true, name: true, email: true } },
         file: true,
       },
       orderBy: { createdAt: "desc" },
-      take: limit,
+      take: 50,
     });
 
-    return NextResponse.json({ messages: messages.reverse(), hasMore: messages.length === limit });
+    return NextResponse.json(serialize({ messages: messages.reverse() }));
   } catch (error) {
     return NextResponse.json({ error: "조회 실패" }, { status: 500 });
   }
 }
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user) return NextResponse.json({ error: "인증 필요" }, { status: 401 });
+    if (!session?.user?.id) return NextResponse.json({ error: "인증 필요" }, { status: 401 });
 
     const chatRoomId = params.id;
     const { type, content, fileId } = await request.json();
 
-    // 1. 메시지 생성
+    // 1. 메시지 저장
     const message = await prisma.chatMessage.create({
       data: {
         chatRoomId,
@@ -57,42 +52,43 @@ export async function POST(
         fileId: type === "FILE" ? fileId : null,
       },
       include: {
-        sender: { select: { name: true } },
+        sender: { select: { id: true, name: true, email: true } },
         file: true,
       },
     });
 
-    // 2. 알림 대상 추출 (본인 제외)
+    const serializedData = serialize(message);
+
+    // 2. 🌟 실시간 소켓 전송 (server.js의 방 이름 규칙 chat:ID 준수)
+    const io = (global as any).io;
+    if (io) {
+      io.to(`chat:${chatRoomId}`).emit("message:new", serializedData);
+      console.log(`📡 [Socket] 발송 성공: chat:${chatRoomId}`);
+    }
+
+    // 3. 상대방 조회 및 FCM 푸시 (기존 로직 유지)
     const members = await prisma.chatRoomMember.findMany({
       where: { chatRoomId, userId: { not: session.user.id } },
-      include: { user: { select: { name: true, fcmToken: true } } },
+      include: { user: { select: { id: true, name: true, fcmToken: true } } },
     });
 
-    // 3. 채팅방 업데이트
-    await prisma.chatRoom.update({
-      where: { id: chatRoomId },
-      data: { updatedAt: new Date() },
-    });
-
-    // 4. FCM 발송 (이곳에서 통합 관리)
     for (const member of members) {
       if (member.user.fcmToken) {
-        const result = type === "TEXT" 
-          ? await sendChatMessageNotification(member.user.fcmToken, session.user.name || "사용자", content, chatRoomId)
-          : await sendFileSharedNotification(member.user.fcmToken, session.user.name || "사용자", message.file?.originalName || "파일", chatRoomId);
-
-        // 로그 출력: 이 메시지가 로그에 두 번 찍히는지 한 번 찍히는지 확인하는 것이 핵심입니다.
-        if (result.success) {
-          console.log(`🚀 [FCM 전송 성공] 수신: ${member.user.name}, ID: ${result.messageId}`);
-        } else {
-          console.warn(`❌ [FCM 전송 실패] 수신: ${member.user.name}, 사유: ${result.error}`);
+        try {
+          if (type === "TEXT") {
+            await sendChatMessageNotification(member.user.fcmToken, session.user.name || "사용자", content, chatRoomId);
+          } else if (type === "FILE" && message.file) {
+            await sendFileSharedNotification(member.user.fcmToken, session.user.name || "사용자", message.file.originalName, chatRoomId);
+          }
+        } catch (e) {
+          console.error("FCM 전송 에러:", e);
         }
       }
     }
 
-    return NextResponse.json({ data: message }, { status: 201 });
+    return NextResponse.json({ data: serializedData }, { status: 201 });
   } catch (error) {
-    console.error("전송 에러:", error);
+    console.error("POST Error:", error);
     return NextResponse.json({ error: "전송 실패" }, { status: 500 });
   }
 }

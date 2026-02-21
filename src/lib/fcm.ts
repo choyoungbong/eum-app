@@ -25,6 +25,7 @@ function initFirebase() {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
+    console.log("✅ Firebase Admin 초기화 성공!");
     return true;
   } catch (error: any) {
     console.error("❌ Firebase 초기화 에러:", error.message);
@@ -44,13 +45,11 @@ export async function sendPushNotification(
   try {
     const message: admin.messaging.Message = {
       token: fcmToken,
-      // 공통 알림 설정
       notification: {
         title: payload.title,
         body: payload.body,
       },
       data: payload.data || {},
-      // 웹 환경 최적화 (모바일 브라우저 포함)
       webpush: {
         headers: { Urgency: "high" },
         notification: {
@@ -62,17 +61,59 @@ export async function sendPushNotification(
           link: payload.data?.click_action || "/chat",
         },
       },
-      android: { priority: "high" },
-      apns: { payload: { aps: { sound: "default", badge: 1 } } },
+      android: { 
+        priority: "high",
+        notification: {
+          sound: "default",
+          clickAction: "FLUTTER_NOTIFICATION_CLICK"
+        }
+      },
+      apns: { 
+        payload: { 
+          aps: { 
+            sound: "default", 
+            badge: 1,
+            contentAvailable: true 
+          } 
+        } 
+      },
     };
 
     const response = await admin.messaging().send(message);
     return { success: true, messageId: response };
   } catch (error: any) {
+    console.error("FCM Send Error:", error);
     return { success: false, error: error.code || error.message };
   }
 }
 
+/**
+ * 통화 요청 알림 전송 (추가된 부분)
+ */
+export async function sendCallNotification(
+  token: string, 
+  senderName: string, 
+  callType: string, 
+  callId: string, 
+  chatRoomId: string
+) {
+  const isVideo = callType === "VIDEO";
+  return sendPushNotification(token, {
+    title: `📞 ${senderName}님으로부터 통화 요청`,
+    body: `${isVideo ? "영상 통화" : "음성 통화"} 요청이 왔습니다.`,
+    data: {
+      type: "call_request",
+      callId,
+      chatRoomId,
+      callType,
+      click_action: `/chat/${chatRoomId}?callId=${callId}`
+    },
+  });
+}
+
+/**
+ * 채팅 메시지 알림 전송
+ */
 export async function sendChatMessageNotification(token: string, senderName: string, content: string, chatRoomId: string) {
   return sendPushNotification(token, {
     title: senderName,
@@ -85,6 +126,9 @@ export async function sendChatMessageNotification(token: string, senderName: str
   });
 }
 
+/**
+ * 파일 공유 알림 전송
+ */
 export async function sendFileSharedNotification(token: string, senderName: string, fileName: string, chatRoomId: string) {
   return sendPushNotification(token, {
     title: `📎 ${senderName}님의 파일 공유`,

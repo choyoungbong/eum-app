@@ -49,7 +49,6 @@ export async function POST(request: NextRequest) {
         name: true,
         fcmToken: true,
         isOnline: true,
-        networkType: true,
       },
     });
 
@@ -69,38 +68,30 @@ export async function POST(request: NextRequest) {
         type: callType,
         status: "PENDING",
       },
-      include: {
-        initiator: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-        receiver: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
     });
 
-    // ========== FCM 푸시 알림 전송 (온라인/오프라인 모두) ==========
+    // ========== FCM 푸시 알림 전송 ==========
     if (receiver.fcmToken) {
       try {
-        await sendCallNotification(
+        // 수정된 fcm.ts의 sendCallNotification 호출
+        const pushResult = await sendCallNotification(
           receiver.fcmToken,
           session.user.name || "사용자",
           callType,
           call.id,
           chatRoomId
         );
-        console.log(`✅ 통화 푸시 전송: ${receiver.name} (${receiver.isOnline ? 'Online' : 'Offline'})`);
+        
+        if (pushResult.success) {
+          console.log(`✅ 통화 푸시 성공: ${receiver.name} (Status: ${receiver.isOnline ? 'Online' : 'Offline'})`);
+        } else {
+          console.error(`❌ 통화 푸시 전송 실패: ${pushResult.error}`);
+        }
       } catch (error) {
-        console.error(`❌ 통화 푸시 실패 (${receiver.name}):`, error);
+        console.error(`❌ 통화 푸시 예외 발생 (${receiver.name}):`, error);
       }
     } else {
-      console.warn(`⚠️  FCM 토큰 없음: ${receiver.name}`);
+      console.warn(`⚠️ FCM 토큰 없음: ${receiver.name}`);
     }
 
     return NextResponse.json(
@@ -130,34 +121,19 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 내가 참여한 활성 통화 조회
     const activeCalls = await prisma.call.findMany({
       where: {
         OR: [
           { initiatorId: session.user.id },
           { receiverId: session.user.id },
         ],
-        status: {
-          in: ["PENDING", "ACCEPTED"],
-        },
+        status: { in: ["PENDING", "ACCEPTED"] },
       },
       include: {
-        initiator: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-        receiver: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
+        initiator: { select: { id: true, name: true } },
+        receiver: { select: { id: true, name: true } },
       },
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy: { createdAt: "desc" },
     });
 
     return NextResponse.json({ calls: activeCalls });

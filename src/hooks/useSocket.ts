@@ -10,19 +10,13 @@ export function useSocket() {
   useEffect(() => {
     if (!session?.user?.id) return;
 
-    // Socket.IO 연결
     const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3000", {
-      auth: {
-        userId: session.user.id,
-      },
+      auth: { userId: session.user.id },
       transports: ["websocket", "polling"],
     });
 
     socket.on("connect", () => {
-      console.log("✅ Socket connected");
       setIsConnected(true);
-
-      // 온라인 상태 업데이트
       fetch("/api/users/presence", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -30,40 +24,24 @@ export function useSocket() {
       });
     });
 
-    socket.on("disconnect", () => {
-      console.log("❌ Socket disconnected");
-      setIsConnected(false);
-    });
-
-    socket.on("connect_error", (error) => {
-      console.error("Socket connection error:", error);
-      setIsConnected(false);
-    });
-
+    socket.on("disconnect", () => setIsConnected(false));
     socketRef.current = socket;
 
-    // 정리
     return () => {
       if (socket) {
-        // 오프라인 상태 업데이트
         fetch("/api/users/presence", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ isOnline: false }),
         });
-
         socket.disconnect();
       }
     };
   }, [session?.user?.id]);
 
-  return {
-    socket: socketRef.current,
-    isConnected,
-  };
+  return { socket: socketRef.current, isConnected };
 }
 
-// 채팅방별 훅
 export function useChatRoom(chatRoomId: string | null) {
   const { socket, isConnected } = useSocket();
   const [messages, setMessages] = useState<any[]>([]);
@@ -72,20 +50,20 @@ export function useChatRoom(chatRoomId: string | null) {
   useEffect(() => {
     if (!socket || !chatRoomId) return;
 
-    // 채팅방 입장
     socket.emit("chat:join", chatRoomId);
 
-    // 새 메시지 수신
     const handleNewMessage = (message: any) => {
-      setMessages((prev) => [...prev, message]);
+      setMessages((prev) => {
+        // 중복 메시지 방지 체크
+        if (prev.find((m) => m.id === message.id)) return prev;
+        return [...prev, message];
+      });
     };
 
-    // 타이핑 중
     const handleTyping = (data: { userId: string }) => {
       setTypingUsers((prev) => new Set(prev).add(data.userId));
     };
 
-    // 타이핑 중지
     const handleTypingStop = (data: { userId: string }) => {
       setTypingUsers((prev) => {
         const next = new Set(prev);
@@ -98,7 +76,6 @@ export function useChatRoom(chatRoomId: string | null) {
     socket.on("typing:user", handleTyping);
     socket.on("typing:stop", handleTypingStop);
 
-    // 정리
     return () => {
       socket.emit("chat:leave", chatRoomId);
       socket.off("message:new", handleNewMessage);
@@ -107,36 +84,21 @@ export function useChatRoom(chatRoomId: string | null) {
     };
   }, [socket, chatRoomId]);
 
-  // 메시지 전송
+  // [중요] 메시지 전송은 이제 API Route(POST)를 통해서 하므로, 
+  // 소켓 emit은 필요한 경우에만(실시간 타이핑 멈춤 등) 사용합니다.
   const sendMessage = (message: any) => {
-    if (socket && chatRoomId) {
-      socket.emit("message:send", {
-        chatRoomId,
-        message,
-      });
-    }
+    // 만약 현재 채팅창 UI에서 API를 호출하고 있다면 이 함수는 비워두거나 
+    // API 호출 로직으로 교체해야 합니다.
+    console.log("소켓을 통한 메시지 발송은 중복 푸시를 방지하기 위해 API를 권장합니다.");
   };
 
-  // 타이핑 시작
   const startTyping = () => {
-    if (socket && chatRoomId) {
-      socket.emit("typing:start", { chatRoomId });
-    }
+    if (socket && chatRoomId) socket.emit("typing:start", { chatRoomId });
   };
 
-  // 타이핑 중지
   const stopTyping = () => {
-    if (socket && chatRoomId) {
-      socket.emit("typing:stop", { chatRoomId });
-    }
+    if (socket && chatRoomId) socket.emit("typing:stop", { chatRoomId });
   };
 
-  return {
-    messages,
-    typingUsers,
-    sendMessage,
-    startTyping,
-    stopTyping,
-    isConnected,
-  };
+  return { messages, setMessages, typingUsers, sendMessage, startTyping, stopTyping, isConnected };
 }

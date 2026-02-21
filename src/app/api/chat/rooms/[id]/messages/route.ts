@@ -12,10 +12,7 @@ export async function GET(
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
-      return NextResponse.json(
-        { error: "인증이 필요합니다" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
     const chatRoomId = params.id;
@@ -24,56 +21,33 @@ export async function GET(
     const before = searchParams.get("before");
 
     const membership = await prisma.chatRoomMember.findFirst({
-      where: {
-        chatRoomId,
-        userId: session.user.id,
-      },
+      where: { chatRoomId, userId: session.user.id },
     });
 
     if (!membership) {
-      return NextResponse.json(
-        { error: "채팅방에 참여하지 않았습니다" },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "채팅방에 참여하지 않았습니다" }, { status: 403 });
     }
 
     const messages = await prisma.chatMessage.findMany({
       where: {
         chatRoomId,
-        ...(before && {
-          createdAt: {
-            lt: new Date(before),
-          },
-        }),
+        ...(before && { createdAt: { lt: new Date(before) } }),
       },
       include: {
-        sender: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
+        sender: { select: { id: true, name: true, email: true } },
         file: true,
       },
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy: { createdAt: "desc" },
       take: limit,
     });
 
-    const sortedMessages = messages.reverse();
-
     return NextResponse.json({
-      messages: sortedMessages,
+      messages: messages.reverse(),
       hasMore: messages.length === limit,
     });
   } catch (error) {
     console.error("Messages fetch error:", error);
-    return NextResponse.json(
-      { error: "메시지 조회 중 오류가 발생했습니다" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "메시지 조회 중 오류가 발생했습니다" }, { status: 500 });
   }
 }
 
@@ -85,10 +59,7 @@ export async function POST(
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
-      return NextResponse.json(
-        { error: "인증이 필요합니다" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
     const chatRoomId = params.id;
@@ -96,40 +67,14 @@ export async function POST(
     const { type, content, fileId } = body;
 
     const membership = await prisma.chatRoomMember.findFirst({
-      where: {
-        chatRoomId,
-        userId: session.user.id,
-      },
+      where: { chatRoomId, userId: session.user.id },
     });
 
     if (!membership) {
-      return NextResponse.json(
-        { error: "채팅방에 참여하지 않았습니다" },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "채팅방에 참여하지 않았습니다" }, { status: 403 });
     }
 
-    if (!type) {
-      return NextResponse.json(
-        { error: "메시지 타입을 지정하세요" },
-        { status: 400 }
-      );
-    }
-
-    if (type === "TEXT" && !content) {
-      return NextResponse.json(
-        { error: "메시지 내용을 입력하세요" },
-        { status: 400 }
-      );
-    }
-
-    if (type === "FILE" && !fileId) {
-      return NextResponse.json(
-        { error: "파일 ID를 지정하세요" },
-        { status: 400 }
-      );
-    }
-
+    // 메시지 생성
     const message = await prisma.chatMessage.create({
       data: {
         chatRoomId,
@@ -139,56 +84,37 @@ export async function POST(
         fileId: type === "FILE" ? fileId : null,
       },
       include: {
-        sender: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
+        sender: { select: { id: true, name: true, email: true } },
         file: true,
       },
     });
 
+    // 상대방 정보 가져오기 (본인 제외)
     const members = await prisma.chatRoomMember.findMany({
-      where: {
-        chatRoomId,
-        userId: {
-          not: session.user.id,
-        },
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            fcmToken: true,
-          },
-        },
-      },
+      where: { chatRoomId, userId: { not: session.user.id } },
+      include: { user: { select: { id: true, name: true, fcmToken: true } } },
     });
 
+    // 파일 공유 권한 처리
     if (type === "FILE" && fileId) {
       for (const member of members) {
-        const existingShare = await prisma.sharedResource.findFirst({
+        await prisma.sharedResource.upsert({
           where: {
-            resourceType: "FILE",
-            resourceId: fileId,
-            sharedWithId: member.userId,
-          },
-        });
-
-        if (!existingShare) {
-          await prisma.sharedResource.create({
-            data: {
+            resourceType_resourceId_sharedWithId: {
               resourceType: "FILE",
               resourceId: fileId,
-              ownerId: session.user.id,
               sharedWithId: member.userId,
-              permission: "VIEW",
-            },
-          });
-        }
+            }
+          },
+          update: {},
+          create: {
+            resourceType: "FILE",
+            resourceId: fileId,
+            ownerId: session.user.id,
+            sharedWithId: member.userId,
+            permission: "VIEW",
+          },
+        });
       }
     }
 
@@ -197,7 +123,7 @@ export async function POST(
       data: { updatedAt: new Date() },
     });
 
-    // ========== FCM 푸시 알림 발송 ==========
+    // ========== FCM 푸시 알림 발송 (이곳에서만 관리) ==========
     for (const member of members) {
       if (member.user.fcmToken) {
         try {
@@ -216,25 +142,16 @@ export async function POST(
               chatRoomId
             );
           }
-          console.log(`✅ 푸시 알림: ${member.user.name}`);
+          // fcm.ts에서 이미 성공 로그를 찍으므로 여기서는 생략하거나 하나만 남깁니다.
         } catch (error) {
           console.error(`❌ 푸시 실패 (${member.user.name}):`, error);
         }
       }
     }
 
-    return NextResponse.json(
-      {
-        message: "메시지가 전송되었습니다",
-        data: message,
-      },
-      { status: 201 }
-    );
+    return NextResponse.json({ message: "메시지가 전송되었습니다", data: message }, { status: 201 });
   } catch (error) {
     console.error("Message send error:", error);
-    return NextResponse.json(
-      { error: "메시지 전송 중 오류가 발생했습니다" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "메시지 전송 중 오류가 발생했습니다" }, { status: 500 });
   }
 }

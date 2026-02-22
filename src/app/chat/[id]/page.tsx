@@ -4,7 +4,7 @@ import { useSession } from "next-auth/react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
-import { useChatRoom } from "@/hooks/useSocket";
+import { useChatRoom } from "@/hooks/useSocket"; 
 
 export default function ChatRoomPage() {
   const { data: session } = useSession();
@@ -54,7 +54,7 @@ export default function ChatRoomPage() {
     }
   }, [chatRoomId]);
 
-  // 2. 실시간 메시지 추가
+  // 2. 실시간 메시지 추가 (중복 방지 및 즉시 반영)
   useEffect(() => {
     if (socketMessages.length > 0) {
       const newMsg = socketMessages[socketMessages.length - 1];
@@ -64,13 +64,15 @@ export default function ChatRoomPage() {
 
   // 3. 자동 스크롤
   useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (scrollRef.current) {
+      scrollRef.current.scrollIntoView({ behavior: "smooth" });
+    }
   }, [allMessages, typingUsers]);
 
   // 4. 메시지 전송
   const onSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || !session || isSending) return;
+    if (!input.trim() || !session?.user?.id || isSending) return;
 
     const content = input;
     setInput("");
@@ -85,10 +87,14 @@ export default function ChatRoomPage() {
 
       const result = await res.json();
       
-      if (socket && result.data) {
-        socket.emit("message:send", { chatRoomId, message: result.data });
+      if (result.data) {
+        // 내 화면에 즉시 추가
+        setAllMessages(prev => [...prev, result.data]);
+        // 상대방에게 전송
+        if (socket) {
+          socket.emit("message:send", { chatRoomId, ...result.data });
+        }
       }
-      
       socket?.emit("typing:stop", { chatRoomId });
     } catch (error) {
       console.error("전송 에러:", error);
@@ -97,120 +103,85 @@ export default function ChatRoomPage() {
     }
   };
 
-  // ✅ 날짜 변환 함수 보강 (Invalid Date 해결)
+  // ✅ 날짜 오류 방어 함수
   const formatTime = (dateStr: any) => {
+    if (!dateStr) return "";
     const date = new Date(dateStr);
-    if (isNaN(date.getTime())) return ""; // 유효하지 않은 날짜면 빈값 반환
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // ==================== WebRTC 통화 기능 ====================
+  // ==================== WebRTC 로직 ====================
   useEffect(() => {
-    if (localStream && localVideoRef.current) {
-      localVideoRef.current.srcObject = localStream;
-    }
+    if (localStream && localVideoRef.current) localVideoRef.current.srcObject = localStream;
   }, [localStream]);
 
   useEffect(() => {
-    if (remoteStream && remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = remoteStream;
-    }
+    if (remoteStream && remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
   }, [remoteStream]);
 
-  useEffect(() => {
-    if (localStream || remoteStream) setIsCalling(true);
-    else {
-      setIsCalling(false);
-      setAudioMuted(false);
-      setVideoOff(false);
-    }
-  }, [localStream, remoteStream]);
-
-  const getOtherMember = () => {
-    if (!chatRoom) return null;
-    return chatRoom.members?.find((m: any) => m.user.id !== session?.user?.id);
-  };
+  const getOtherMember = () => chatRoom?.members?.find((m: any) => m.user.id !== session?.user?.id);
 
   const handleVoiceCall = () => {
     const otherMember = getOtherMember();
-    if (!otherMember) return alert("상대방을 찾을 수 없습니다.");
-    initiateCall("VOICE", otherMember.user.id);
-  };
-
-  const handleVideoCall = () => {
-    const otherMember = getOtherMember();
-    if (!otherMember) return alert("상대방을 찾을 수 없습니다.");
-    initiateCall("VIDEO", otherMember.user.id);
-  };
-
-  const toggleAudio = () => {
-    if (localStream) {
-      localStream.getAudioTracks().forEach(track => { track.enabled = !track.enabled; });
-      setAudioMuted(!audioMuted);
-    }
-  };
-
-  const toggleVideo = () => {
-    if (localStream) {
-      localStream.getVideoTracks().forEach(track => { track.enabled = !track.enabled; });
-      setVideoOff(!videoOff);
+    if (otherMember) {
+      setIsCalling(true);
+      initiateCall("VOICE", otherMember.user.id);
     }
   };
 
   const handleEndCall = () => {
     const otherMember = getOtherMember();
     if (otherMember) endCall(otherMember.user.id);
+    setIsCalling(false);
   };
 
   return (
-    <div className="flex flex-col h-screen bg-[#F8F9FA] text-black font-sans overflow-hidden">
-      {/* 상단 헤더 */}
+    <div className="flex flex-col h-screen bg-[#F8F9FA] text-black overflow-hidden relative">
+      {/* 헤더 */}
       <div className="p-4 border-b font-bold flex gap-3 items-center bg-white sticky top-0 z-20 shadow-sm justify-between">
         <div className="flex items-center gap-3">
-          <Link href="/chat" className="hover:bg-gray-100 p-1 rounded-full transition-colors">
+          <button onClick={() => router.back()} className="hover:bg-gray-100 p-1 rounded-full">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
-          </Link> 
+          </button> 
           <span className="text-lg">대화방</span>
         </div>
-
-        {chatRoom?.type === "DIRECT" && !isCalling && (
-          <div className="flex gap-2">
-            <button onClick={handleVoiceCall} className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white hover:bg-green-600 shadow-md">📞</button>
-            <button onClick={handleVideoCall} className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white hover:bg-blue-600 shadow-md">📹</button>
-          </div>
+        {!isCalling && (
+          <button onClick={handleVoiceCall} className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white shadow-md active:scale-90 transition-transform">📞</button>
         )}
       </div>
 
       {/* 메시지 리스트 */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-24">
-        {allMessages.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.sender.id === session?.user?.id ? "justify-end" : "justify-start"}`}>
-            <div className={`flex flex-col ${msg.sender.id === session?.user?.id ? "items-end" : "items-start"}`}>
-              {msg.sender.id !== session?.user?.id && (
-                <span className="text-[11px] text-gray-500 mb-1 ml-1 font-medium">{msg.sender.name}</span>
-              )}
-              <div className={`p-3 px-4 rounded-2xl max-w-[85%] text-[14px] shadow-sm relative ${
-                msg.sender.id === session?.user?.id 
-                  ? "bg-blue-600 text-white rounded-tr-none" 
-                  : "bg-white border border-gray-200 text-black rounded-tl-none"
-              }`}>
-                {msg.content}
-                {/* ✅ 수정: Invalid Date 방지를 위해 formatTime 함수 사용 */}
-                <div className={`text-[8px] mt-1 opacity-50 ${msg.sender.id === session?.user?.id ? "text-right" : "text-left"}`}>
-                   {formatTime(msg.createdAt)}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-28">
+        {allMessages.map((msg, idx) => {
+          // ✅ 핵심 수정: 구조적 결함 방어 (id 에러 해결)
+          const senderId = msg.sender?.id || msg.senderId || msg.userId;
+          const isMe = senderId === session?.user?.id;
+          const senderName = msg.sender?.name || "상대방";
+
+          return (
+            <div key={msg.id || idx} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
+              <div className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                {!isMe && <span className="text-[10px] text-gray-400 mb-1 ml-1">{senderName}</span>}
+                <div className={`p-3 px-4 rounded-2xl max-w-[85%] text-[14px] shadow-sm relative ${
+                  isMe ? "bg-blue-600 text-white rounded-tr-none" : "bg-white border border-gray-200 text-black rounded-tl-none"
+                }`}>
+                  {msg.content}
+                  <div className={`text-[8px] mt-1 opacity-50 ${isMe ? "text-right" : "text-left"}`}>
+                     {formatTime(msg.createdAt || new Date())}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         {typingUsers.size > 0 && (
-          <div className="text-[12px] text-blue-500 animate-pulse px-2 font-bold">상대방이 메시지를 입력 중...</div>
+          <div className="text-[12px] text-blue-500 animate-pulse px-2 font-bold italic">입력 중...</div>
         )}
         <div ref={scrollRef} />
       </div>
 
-      {/* ✅ 수정: 하단 입력바 (글자색 검정 고정 및 텍스트 박스 개선) */}
-      <div className="fixed bottom-0 left-0 right-0 p-3 bg-white border-t border-gray-200 z-30 shadow-[0_-2px_10px_rgba(0,0,0,0.05)]">
+      {/* 하단 입력창 */}
+      <div className="fixed bottom-0 left-0 right-0 p-3 bg-white border-t border-gray-200 z-30">
         <form onSubmit={onSend} className="flex items-center gap-2 max-w-4xl mx-auto">
           <input 
             value={input}
@@ -219,55 +190,50 @@ export default function ChatRoomPage() {
               if (e.target.value.length > 0) socket?.emit("typing:start", { chatRoomId });
               else socket?.emit("typing:stop", { chatRoomId });
             }}
-            // ✅ text-black 클래스를 추가하여 글자가 흰색으로 보이지 않게 수정
-            className="flex-1 border border-gray-300 rounded-full px-5 py-3 text-black bg-gray-100 outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all text-[15px] placeholder:text-gray-500"
+            // ✅ text-black으로 글자색 고정
+            className="flex-1 border border-gray-300 rounded-full px-5 py-3 text-black bg-gray-100 outline-none focus:bg-white text-[15px]"
             placeholder="메시지를 입력하세요..."
           />
           <button 
-            type="submit"
-            disabled={!input.trim() || isSending}
-            className="bg-blue-600 text-white w-12 h-12 flex items-center justify-center rounded-full font-bold active:scale-90 transition-all disabled:bg-gray-300 shadow-md"
+            type="submit" 
+            disabled={!input.trim() || isSending} 
+            className="bg-blue-600 text-white w-12 h-12 flex items-center justify-center rounded-full font-bold disabled:bg-gray-300 transition-all active:scale-95 shadow-lg shadow-blue-500/20"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
           </button>
         </form>
       </div>
 
-      {/* 통화 수신 오버레이 */}
-      {incomingCall && !isCalling && (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-8 text-center shadow-2xl">
-            <div className="w-24 h-24 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full mx-auto mb-6 flex items-center justify-center text-3xl font-bold text-white animate-pulse">
-              {getOtherMember()?.user.name.charAt(0).toUpperCase()}
-            </div>
-            <h2 className="text-2xl font-bold text-gray-900">{getOtherMember()?.user.name}</h2>
-            <p className="text-gray-500 mb-10 text-sm">{incomingCall.callType === "VIDEO" ? "영상" : "음성"} 통화 요청</p>
-            <div className="flex gap-4">
-              <button onClick={rejectCall} className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-bold">거절</button>
-              <button onClick={acceptCall} className="flex-1 py-4 bg-green-500 text-white rounded-2xl font-bold">수락</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 통화 모달 */}
+      {(incomingCall || isCalling) && (
+        <div className="fixed inset-0 z-[100] bg-black/95 flex flex-col items-center justify-center p-6 backdrop-blur-md">
+           <div className="text-white text-center mb-10">
+              <div className="w-24 h-24 bg-blue-600 rounded-full mx-auto mb-4 flex items-center justify-center text-3xl font-bold border-4 border-white/20 animate-pulse">
+                {getOtherMember()?.user.name.charAt(0).toUpperCase()}
+              </div>
+              <h2 className="text-2xl font-bold">{isCalling ? "통화 중" : "전화 옴"}</h2>
+              <p className="text-white/50 text-sm mt-2">{getOtherMember()?.user.name}</p>
+           </div>
+           
+           <div className="relative w-full max-w-sm aspect-[3/4] bg-gray-900 rounded-[2rem] overflow-hidden mb-12 shadow-2xl border border-white/10">
+              <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
+              <div className="absolute top-4 right-4 w-24 aspect-[3/4] bg-black rounded-xl overflow-hidden border-2 border-white/20 shadow-lg">
+                <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover mirror" />
+              </div>
+           </div>
 
-      {/* 실시간 통화 화면 */}
-      {isCalling && (
-        <div className="fixed inset-0 z-[200] bg-black flex items-center justify-center">
-          <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
-          <div className="absolute top-10 right-10 w-32 h-44 bg-gray-900 rounded-3xl overflow-hidden border-2 border-white/20 shadow-2xl">
-            <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-          </div>
-          <div className="absolute bottom-16 flex items-center gap-6">
-            <button onClick={toggleAudio} className={`w-16 h-16 rounded-full flex items-center justify-center ${audioMuted ? "bg-red-500" : "bg-white/20 backdrop-blur-md"} text-white`}>
-               {audioMuted ? "🔇" : "🎤"}
-            </button>
-            <button onClick={handleEndCall} className="w-20 h-20 bg-red-500 rounded-full flex items-center justify-center shadow-xl shadow-red-500/40 hover:scale-110 transition-transform">
-              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="currentColor" className="text-white rotate-[135deg]"><path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 011 1V20a1 1 0 01-1 1C10.29 21 3 13.71 3 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.46.57 3.58a1 1 0 01-.25 1.01l-2.2 2.2z"/></svg>
-            </button>
-            <button onClick={toggleVideo} className={`w-16 h-16 rounded-full flex items-center justify-center ${videoOff ? "bg-red-500" : "bg-white/20 backdrop-blur-md"} text-white`}>
-               {videoOff ? "🚫" : "📹"}
-            </button>
-          </div>
+           <div className="flex gap-10">
+              {incomingCall && !isCalling ? (
+                <>
+                  <button onClick={rejectCall} className="w-16 h-16 bg-red-500 rounded-full text-white text-2xl shadow-xl active:scale-90 transition-transform">✕</button>
+                  <button onClick={acceptCall} className="w-16 h-16 bg-green-500 rounded-full text-white text-2xl shadow-xl active:scale-90 transition-transform">✓</button>
+                </>
+              ) : (
+                <button onClick={handleEndCall} className="w-20 h-20 bg-red-500 rounded-full flex items-center justify-center shadow-2xl shadow-red-500/40 hover:scale-105 active:scale-95 transition-all">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="currentColor" className="text-white rotate-[135deg]"><path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 011 1V20a1 1 0 01-1 1C10.29 21 3 13.71 3 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.46.57 3.58a1 1 0 01-.25 1.01l-2.2 2.2z"/></svg>
+                </button>
+              )}
+           </div>
         </div>
       )}
     </div>

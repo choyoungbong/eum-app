@@ -7,8 +7,8 @@ storage/
 *.log
 
 # repomix
-repomix-output.xml
-repomix-output.txt
+#repomix-output.xml
+#repomix-output.txt
 
 # 백업 파일
 *.backup

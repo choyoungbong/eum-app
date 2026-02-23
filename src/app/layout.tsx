@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Providers } from "./providers";
+import { ToastContainer } from "@/components/Toast";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,6 +19,8 @@ export default function RootLayout({ children }) {
       </head>
       <body>
         <Providers>{children}</Providers>
+        {/* ✅ 전역 Toast — 모든 페이지에서 toast.error() 등 사용 가능 */}
+        <ToastContainer />
       </body>
     </html>
   );

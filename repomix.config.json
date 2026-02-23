@@ -1,0 +1,13 @@
+{
+  "output": {
+    "filePath": "repomix-output.xml"
+  },
+  "ignore": {
+    "customPatterns": [
+      "*.backup",
+      "*.backup-*",
+      "prisma/migrations/**",
+      "repomix-output.*"
+    ]
+  }
+}

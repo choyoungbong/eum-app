@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { sendChatMessageNotification, sendFileSharedNotification } from "@/lib/fcm";
 
-// BigInt 및 Date 객체를 JSON 안전한 형태로 변환하는 유틸리티
+// BigInt 직렬화 유틸
 function serialize(data: any) {
   return JSON.parse(
     JSON.stringify(data, (key, value) =>
@@ -13,7 +13,7 @@ function serialize(data: any) {
   );
 }
 
-// 1. 메시지 목록 조회 (GET)
+// ─── GET: 메시지 목록 조회 ───────────────────────────────
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -29,12 +29,16 @@ export async function GET(
     const limit = parseInt(searchParams.get("limit") || "50");
     const before = searchParams.get("before");
 
+    // 멤버십 확인
     const membership = await prisma.chatRoomMember.findFirst({
       where: { chatRoomId, userId: session.user.id },
     });
 
     if (!membership) {
-      return NextResponse.json({ error: "채팅방에 참여하지 않았습니다" }, { status: 403 });
+      return NextResponse.json(
+        { error: "채팅방에 참여하지 않았습니다" },
+        { status: 403 }
+      );
     }
 
     const messages = await prisma.chatMessage.findMany({
@@ -50,7 +54,6 @@ export async function GET(
       take: limit,
     });
 
-    // 클라이언트에서는 시간 순서대로 보여줘야 하므로 reverse
     return NextResponse.json(serialize({ messages: messages.reverse() }));
   } catch (error) {
     console.error("GET Messages Error:", error);
@@ -58,7 +61,7 @@ export async function GET(
   }
 }
 
-// 2. 메시지 전송 및 실시간 전파 (POST)
+// ─── POST: 메시지 전송 ────────────────────────────────────
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -78,7 +81,10 @@ export async function POST(
         chatRoomId,
         senderId: session.user.id,
         type,
-        content: type === "TEXT" || type === "CALL_LOG" || type === "SYSTEM" ? content : null,
+        content:
+          type === "TEXT" || type === "CALL_LOG" || type === "SYSTEM"
+            ? content
+            : null,
         fileId: type === "FILE" ? fileId : null,
         callId: callId || null,
       },
@@ -90,23 +96,23 @@ export async function POST(
 
     const serializedMessage = serialize(message);
 
-    // ✅ [핵심] 소켓 실시간 전송 (server.js의 global.io 사용)
+    // ✅ 이벤트명 통일: "message:new" → "message:receive"
+    // (클라이언트 useSocket.ts의 listen 이벤트와 일치)
     const io = (global as any).io;
     if (io) {
-      // server.js에서 정의한 방 이름 규칙 'chat:ID'를 준수합니다.
-      io.to(`chat:${chatRoomId}`).emit("message:new", serializedMessage);
-      console.log(`📡 [Socket] 메시지 브로드캐스트 성공: chat:${chatRoomId}`);
+      io.to(`chat:${chatRoomId}`).emit("message:receive", serializedMessage);
+      console.log(`📡 소켓 브로드캐스트: chat:${chatRoomId}`);
     } else {
-      console.warn("⚠️ [Socket] global.io를 찾을 수 없습니다. 소켓 서버 상태를 확인하세요.");
+      console.warn("⚠️ global.io 없음 — 소켓 서버 상태 확인 필요");
     }
 
-    // 채팅방 멤버 조회 (푸시 및 권한 처리용)
+    // 채팅방 멤버 조회 (파일 권한 + FCM용)
     const members = await prisma.chatRoomMember.findMany({
       where: { chatRoomId },
       include: { user: { select: { id: true, name: true, fcmToken: true } } },
     });
 
-    // 파일 공유 시 다른 멤버들에게 권한 부여 (기존 로직 유지)
+    // 파일 공유 시 멤버들에게 권한 부여
     if (type === "FILE" && fileId) {
       for (const member of members) {
         if (member.userId !== session.user.id) {
@@ -131,13 +137,13 @@ export async function POST(
       }
     }
 
-    // 채팅방 마지막 업데이트 시간 갱신
+    // 채팅방 updatedAt 갱신
     await prisma.chatRoom.update({
       where: { id: chatRoomId },
       data: { updatedAt: new Date() },
     });
 
-    // ✅ FCM 푸시 알림 발송 (나를 제외한 멤버들에게)
+    // FCM 푸시 알림 (나 제외한 멤버들)
     for (const member of members) {
       if (member.userId !== session.user.id && member.user.fcmToken) {
         try {
@@ -152,12 +158,12 @@ export async function POST(
             await sendFileSharedNotification(
               member.user.fcmToken,
               session.user.name || "사용자",
-              message.file.originalName,
+              (message.file as any).originalName,
               chatRoomId
             );
           }
         } catch (error) {
-          console.error(`❌ 푸시 실패 (${member.user.name}):`, error);
+          console.error(`❌ FCM 실패 (${member.user.name}):`, error);
         }
       }
     }

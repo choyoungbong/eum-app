@@ -11,7 +11,7 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "ai:update": "repomix && git add . && git commit -m 'Update code and AI context' && git push origin master"
+    "ai:update": "npx repomix && git add . && git commit -m \"Update code and AI context\" && git push origin master"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

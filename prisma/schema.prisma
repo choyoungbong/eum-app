@@ -338,3 +338,36 @@ model PasswordResetToken {
 
   @@map("password_reset_tokens")
 }
+
+// 1) enum 추가 (다른 enum 옆에)
+enum NotificationType {
+  COMMENT
+  SHARE
+  CHAT
+  SYSTEM
+  FILE_UPLOAD
+  CALL
+}
+
+// 2) User 모델에 관계 추가
+//    sentMessages ChatMessage[] ... 뒤에:
+//    notifications Notification[]
+
+// 3) 새 모델 추가
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String           @map("user_id")
+  type      NotificationType @default(SYSTEM)
+  title     String
+  body      String?
+  link      String?
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}

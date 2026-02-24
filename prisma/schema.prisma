@@ -371,3 +371,20 @@ model Notification {
   @@index([createdAt])
   @@map("notifications")
 }
+
+// prisma/schema.prisma 에 추가할 내용
+// User 모델에: emailVerificationTokens EmailVerificationToken[] 추가
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("email_verification_tokens")
+}

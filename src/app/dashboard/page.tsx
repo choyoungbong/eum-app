@@ -6,6 +6,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { getFileIcon, getFileColor, formatFileSize } from "@/lib/client-utils";
 
 interface Folder {
   id: string;
@@ -255,13 +256,17 @@ export default function DashboardPage() {
             <Link href="/chat" className={pathname === "/chat" ? "text-blue-600" : ""}>채팅</Link>
           </nav>
         </div>
-        <div className="flex items-center gap-4">
-          <span className="text-[12px] font-black text-slate-600 bg-slate-100 px-3 py-1.5 rounded-full">
+        <div className="flex items-center gap-2">
+          {/* ✅ 이름 클릭 → 마이페이지 */}
+          <Link
+            href="/profile"
+            className="text-[12px] font-black text-slate-600 bg-slate-100 px-3 py-1.5 rounded-full hover:bg-slate-200 transition"
+          >
             {session.user?.name}님
-          </span>
+          </Link>
           <button
             onClick={() => signOut()}
-            className="text-[11px] font-black bg-slate-900 text-white px-3 py-2 rounded-lg"
+            className="text-[11px] font-black bg-slate-900 text-white px-3 py-2 rounded-lg hover:bg-slate-700 transition"
           >
             로그아웃
           </button>
@@ -269,13 +274,27 @@ export default function DashboardPage() {
       </header>
 
       {/* 모바일 하단바 */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t px-12 py-3 z-50 flex justify-between items-center shadow-lg">
-        <Link href="/dashboard" className="text-xl">📁</Link>
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t px-6 py-2 z-50 flex justify-around items-center shadow-lg">
+        <Link href="/dashboard" className={`flex flex-col items-center gap-0.5 ${pathname === "/dashboard" ? "text-blue-600" : "text-gray-400"}`}>
+          <span className="text-xl">📁</span>
+          <span className="text-[9px] font-medium">파일</span>
+        </Link>
+        <Link href="/posts" className={`flex flex-col items-center gap-0.5 ${pathname === "/posts" ? "text-blue-600" : "text-gray-400"}`}>
+          <span className="text-xl">📝</span>
+          <span className="text-[9px] font-medium">게시판</span>
+        </Link>
         <button
           onClick={() => setShowFolderModal(true)}
-          className="w-12 h-12 bg-blue-600 text-white rounded-full flex items-center justify-center text-2xl -mt-10 border-4 border-white shadow-xl"
+          className="w-12 h-12 bg-blue-600 text-white rounded-full flex items-center justify-center text-2xl -mt-6 border-4 border-white shadow-xl"
         >+</button>
-        <Link href="/chat" className="text-xl opacity-30">💬</Link>
+        <Link href="/chat" className={`flex flex-col items-center gap-0.5 ${pathname === "/chat" ? "text-blue-600" : "text-gray-400"}`}>
+          <span className="text-xl">💬</span>
+          <span className="text-[9px] font-medium">채팅</span>
+        </Link>
+        <Link href="/profile" className={`flex flex-col items-center gap-0.5 ${pathname === "/profile" ? "text-blue-600" : "text-gray-400"}`}>
+          <span className="text-xl">👤</span>
+          <span className="text-[9px] font-medium">프로필</span>
+        </Link>
       </div>
 
       {/* 경로 안내 */}
@@ -395,15 +414,17 @@ export default function DashboardPage() {
                   className="group cursor-pointer"
                   onClick={() => { setSelectedFile(file); setShowFileDetail(true); }}
                 >
-                  <div className="aspect-square bg-white border rounded-[2rem] flex items-center justify-center overflow-hidden group-hover:shadow-xl transition-all relative">
+                  <div className={`aspect-square border rounded-[2rem] flex items-center justify-center overflow-hidden group-hover:shadow-xl transition-all relative ${
+                    file.thumbnailUrl ? "bg-white" : getFileColor(file.mimeType)
+                  }`}>
                     {file.thumbnailUrl ? (
                       <img src={file.thumbnailUrl} className="w-full h-full object-cover" alt={file.originalName} />
                     ) : (
-                      <span className="text-4xl">📄</span>
+                      <span className="text-4xl select-none">{getFileIcon(file.mimeType)}</span>
                     )}
                     {file.userId !== session.user?.id && (
                       <span className="absolute top-2 right-2 bg-blue-600 text-white text-[8px] px-1.5 py-0.5 rounded-full">
-                        SHARED
+                        공유
                       </span>
                     )}
                   </div>
@@ -467,21 +488,26 @@ export default function DashboardPage() {
             className="bg-white w-full max-w-md rounded-[2.5rem] overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="aspect-video bg-slate-50 flex items-center justify-center relative border-b">
+            <div className={`aspect-video flex items-center justify-center relative border-b ${
+              selectedFile.thumbnailUrl ? "bg-slate-50" : getFileColor(selectedFile.mimeType)
+            }`}>
               {selectedFile.thumbnailUrl ? (
                 <img src={selectedFile.thumbnailUrl} className="h-full object-contain" alt={selectedFile.originalName} />
               ) : (
-                <span className="text-8xl">📄</span>
+                <span className="text-8xl select-none">{getFileIcon(selectedFile.mimeType)}</span>
               )}
               <button
                 onClick={() => setShowFileDetail(false)}
-                className="absolute top-4 right-4 bg-white/80 w-8 h-8 rounded-full font-black"
+                className="absolute top-4 right-4 bg-white/80 backdrop-blur-sm w-8 h-8 rounded-full font-black hover:bg-white transition"
               >
                 ✕
               </button>
             </div>
             <div className="p-8">
-              <h3 className="text-lg font-black break-all mb-4">{selectedFile.originalName}</h3>
+              <h3 className="text-lg font-black break-all mb-1">{selectedFile.originalName}</h3>
+              <p className="text-xs text-slate-400 mb-4">
+                {formatFileSize(selectedFile.size)} · {selectedFile.mimeType}
+              </p>
               <div className="mb-6">
                 <p className="text-[10px] font-black text-slate-400 uppercase mb-2">태그</p>
                 <div className="flex flex-wrap gap-2 mb-3">

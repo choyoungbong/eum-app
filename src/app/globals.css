@@ -4,12 +4,57 @@
 
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
 
+/* ─────────────────────────────────────────
+   라이트 모드 CSS 변수 (기본값)
+───────────────────────────────────────── */
 :root {
   --eum-purple: #7c3aed;
   --eum-blue: #2563eb;
   --eum-dark: #0f0c29;
   --eum-glass: rgba(255, 255, 255, 0.06);
   --eum-border: rgba(255, 255, 255, 0.12);
+
+  --bg-base:       #f8f9fa;
+  --bg-surface:    #ffffff;
+  --bg-elevated:   #ffffff;
+  --bg-muted:      #f1f5f9;
+  --bg-hover:      #f1f5f9;
+
+  --text-primary:  #0f172a;
+  --text-secondary:#475569;
+  --text-muted:    #94a3b8;
+  --text-inverted: #ffffff;
+
+  --border-base:   #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+}
+
+/* ─────────────────────────────────────────
+   다크모드 CSS 변수
+───────────────────────────────────────── */
+.dark {
+  --bg-base:       #0f172a;
+  --bg-surface:    #1e293b;
+  --bg-elevated:   #293548;
+  --bg-muted:      #1e293b;
+  --bg-hover:      #2d3f55;
+
+  --text-primary:  #f1f5f9;
+  --text-secondary:#94a3b8;
+  --text-muted:    #64748b;
+  --text-inverted: #0f172a;
+
+  --border-base:   #334155;
+  --border-strong: #475569;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+
+  --eum-glass: rgba(255, 255, 255, 0.04);
+  --eum-border: rgba(255, 255, 255, 0.08);
 }
 
 * {
@@ -22,37 +67,42 @@
 
 body {
   font-family: 'Pretendard', -apple-system, sans-serif;
-  background-color: var(--eum-dark);
-  color: #ffffff;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
   overflow-x: hidden;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-/* 세련된 스크롤바 커스텀 */
-::-webkit-scrollbar {
-  width: 6px;
+.eum-landing {
+  background-color: var(--eum-dark);
+  color: #ffffff;
 }
-::-webkit-scrollbar-track {
-  background: var(--eum-dark);
-}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
 ::-webkit-scrollbar-thumb {
   background: rgba(124, 58, 237, 0.3);
   border-radius: 10px;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: var(--eum-purple);
-}
+::-webkit-scrollbar-thumb:hover { background: var(--eum-purple); }
 
-/* 전역 그라데이션 텍스트 클래스 */
 .text-eum-gradient {
   background: linear-gradient(135deg, #a78bfa, #60a5fa);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
-/* Glassmorphism 기본 클래스 */
 .eum-glass-effect {
   background: var(--eum-glass);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--eum-border);
+}
+
+*, *::before, *::after {
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+button, a, input, textarea, select {
+  transition: background-color 0.15s ease, border-color 0.15s ease,
+              color 0.1s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 }

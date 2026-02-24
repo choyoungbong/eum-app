@@ -1,5 +1,6 @@
-﻿/** @type {import('tailwindcss').Config} */
+/** @type {import('tailwindcss').Config} */
 module.exports = {
+  darkMode: 'class', // ✅ class 기반 다크모드 활성화
   content: [
     './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
     './src/components/**/*.{js,ts,jsx,tsx,mdx}',
@@ -9,7 +10,7 @@ module.exports = {
     extend: {
       colors: {
         primary: {
-          50: '#f0f9ff',
+          50:  '#f0f9ff',
           100: '#e0f2fe',
           500: '#0ea5e9',
           600: '#0284c7',

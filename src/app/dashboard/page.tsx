@@ -4,9 +4,48 @@ import { useSession, signOut } from "next-auth/react";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
+import { Bell } from "lucide-react";
+import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { getFileIcon, getFileColor, formatFileSize } from "@/lib/client-utils";
+import FilePreviewModal from "@/components/FilePreviewModal";
+
+// 🔔 알림 벨 컴포넌트 (헤더용)
+function NotificationBell() {
+  const [unread, setUnread] = useState(0);
+
+  useEffect(() => {
+    fetch("/api/notifications?unread=true")
+      .then((r) => r.json())
+      .then((d) => setUnread(d.unreadCount ?? 0))
+      .catch(() => {});
+
+    // 30초마다 폴링
+    const timer = setInterval(() => {
+      fetch("/api/notifications?unread=true")
+        .then((r) => r.json())
+        .then((d) => setUnread(d.unreadCount ?? 0))
+        .catch(() => {});
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <Link
+      href="/notifications"
+      className="relative p-2 rounded-lg hover:bg-slate-100 transition-colors"
+      title="알림"
+    >
+      <Bell size={18} className="text-slate-600" />
+      {unread > 0 && (
+        <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">
+          {unread > 99 ? "99+" : unread}
+        </span>
+      )}
+    </Link>
+  );
+}
 
 interface Folder {
   id: string;
@@ -242,31 +281,34 @@ export default function DashboardPage() {
   if (!session) return null;
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] flex flex-col text-slate-900 pb-20 md:pb-0">
+    <div className="min-h-screen bg-[#F8F9FA] dark:bg-slate-900 flex flex-col text-slate-900 dark:text-slate-100 pb-20 md:pb-0">
       {/* ConfirmDialog 렌더링 */}
       {confirmDialog}
 
       {/* 헤더 */}
-      <header className="bg-white border-b sticky top-0 z-40 px-6 h-16 flex items-center justify-between shadow-sm">
+      <header className="bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 dark:border-slate-700 sticky top-0 z-40 px-6 h-16 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-6">
-          <h1 className="text-xl font-black text-blue-600">이음</h1>
-          <nav className="flex items-center gap-4 text-xs font-bold text-slate-400">
+          <h1 className="text-xl font-black text-blue-600 dark:text-blue-400">이음</h1>
+          <nav className="flex items-center gap-4 text-xs font-bold text-slate-400 dark:text-slate-500 dark:text-slate-400 dark:text-slate-500 dark:text-slate-400">
             <Link href="/dashboard" className={pathname === "/dashboard" ? "text-blue-600" : ""}>파일</Link>
             <Link href="/posts" className={pathname === "/posts" ? "text-blue-600" : ""}>게시판</Link>
             <Link href="/chat" className={pathname === "/chat" ? "text-blue-600" : ""}>채팅</Link>
           </nav>
         </div>
         <div className="flex items-center gap-2">
+          {/* 🔔 알림 벨 */}
+          <NotificationBell />
+          <ThemeToggle />
           {/* ✅ 이름 클릭 → 마이페이지 */}
           <Link
             href="/profile"
-            className="text-[12px] font-black text-slate-600 bg-slate-100 px-3 py-1.5 rounded-full hover:bg-slate-200 transition"
+            className="text-[12px] font-black text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 px-3 py-1.5 rounded-full hover:bg-slate-200 dark:hover:bg-slate-600 transition"
           >
             {session.user?.name}님
           </Link>
           <button
             onClick={() => signOut()}
-            className="text-[11px] font-black bg-slate-900 text-white px-3 py-2 rounded-lg hover:bg-slate-700 transition"
+            className="text-[11px] font-black bg-slate-900 dark:bg-slate-700 text-white px-3 py-2 rounded-lg hover:bg-slate-700 dark:hover:bg-slate-600 transition"
           >
             로그아웃
           </button>
@@ -274,7 +316,7 @@ export default function DashboardPage() {
       </header>
 
       {/* 모바일 하단바 */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t px-6 py-2 z-50 flex justify-around items-center shadow-lg">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-800 border-t dark:border-slate-700 px-6 py-2 z-50 flex justify-around items-center shadow-lg">
         <Link href="/dashboard" className={`flex flex-col items-center gap-0.5 ${pathname === "/dashboard" ? "text-blue-600" : "text-gray-400"}`}>
           <span className="text-xl">📁</span>
           <span className="text-[9px] font-medium">파일</span>
@@ -364,13 +406,13 @@ export default function DashboardPage() {
                     <span className="text-2xl">📂</span>
                     <div className="truncate">
                       <p className="text-sm font-bold truncate">{f.name}</p>
-                      <p className="text-[10px] font-bold text-slate-400">{f._count.files} items</p>
+                      <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 dark:text-slate-400">{f._count.files} items</p>
                     </div>
                   </div>
                   <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
                       onClick={() => { setSelectedFolder(f); setShareType("FOLDER"); setShowShareModal(true); }}
-                      className="p-1.5 hover:bg-slate-50 rounded-lg"
+                      className="p-1.5 hover:bg-slate-50 dark:bg-slate-900 rounded-lg"
                       title="공유"
                     >🔗</button>
                     {f.userId === session.user?.id && (
@@ -431,7 +473,7 @@ export default function DashboardPage() {
                   <p className="mt-2 text-[10px] font-bold text-center truncate px-2">{file.originalName}</p>
                   <div className="flex flex-wrap justify-center gap-1 mt-1">
                     {file.fileTags?.map((ft) => (
-                      <span key={ft.tag.id} className="text-[8px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">
+                      <span key={ft.tag.id} className="text-[8px] bg-slate-100 text-slate-500 dark:text-slate-400 px-1.5 py-0.5 rounded">
                         #{ft.tag.name}
                       </span>
                     ))}
@@ -463,7 +505,7 @@ export default function DashboardPage() {
               <button
                 type="button"
                 onClick={() => setShowFolderModal(false)}
-                className="flex-1 font-bold text-slate-400"
+                className="flex-1 font-bold text-slate-400 dark:text-slate-500 dark:text-slate-400"
               >
                 취소
               </button>
@@ -478,82 +520,16 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 모달: 파일 상세 */}
-      {showFileDetail && selectedFile && (
-        <div
-          className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={() => setShowFileDetail(false)}
-        >
-          <div
-            className="bg-white w-full max-w-md rounded-[2.5rem] overflow-hidden shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className={`aspect-video flex items-center justify-center relative border-b ${
-              selectedFile.thumbnailUrl ? "bg-slate-50" : getFileColor(selectedFile.mimeType)
-            }`}>
-              {selectedFile.thumbnailUrl ? (
-                <img src={selectedFile.thumbnailUrl} className="h-full object-contain" alt={selectedFile.originalName} />
-              ) : (
-                <span className="text-8xl select-none">{getFileIcon(selectedFile.mimeType)}</span>
-              )}
-              <button
-                onClick={() => setShowFileDetail(false)}
-                className="absolute top-4 right-4 bg-white/80 backdrop-blur-sm w-8 h-8 rounded-full font-black hover:bg-white transition"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="p-8">
-              <h3 className="text-lg font-black break-all mb-1">{selectedFile.originalName}</h3>
-              <p className="text-xs text-slate-400 mb-4">
-                {formatFileSize(selectedFile.size)} · {selectedFile.mimeType}
-              </p>
-              <div className="mb-6">
-                <p className="text-[10px] font-black text-slate-400 uppercase mb-2">태그</p>
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {selectedFile.fileTags?.map((ft) => (
-                    <span key={ft.tag.id} className="text-xs bg-blue-50 text-blue-600 px-2.5 py-1 rounded-lg font-bold">
-                      #{ft.tag.name}
-                    </span>
-                  ))}
-                </div>
-                <form onSubmit={handleAddTag} className="flex gap-2">
-                  <input
-                    type="text"
-                    value={newTagName}
-                    onChange={(e) => setNewTagName(e.target.value)}
-                    placeholder="새 태그..."
-                    className="flex-1 bg-slate-50 border rounded-xl px-3 py-2 text-xs outline-none"
-                  />
-                  <button type="submit" className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold">
-                    추가
-                  </button>
-                </form>
-              </div>
-              <div className="flex gap-2 mb-2">
-                <button
-                  onClick={() => { setShowFileDetail(false); setShareType("FILE"); setShowShareModal(true); }}
-                  className="flex-1 py-4 bg-slate-100 rounded-2xl text-xs font-black"
-                >
-                  🔗 공유
-                </button>
-                <button
-                  onClick={() => handleDeleteFile(selectedFile.id)}
-                  className="flex-1 py-4 bg-red-50 text-red-500 rounded-2xl text-xs font-black"
-                >
-                  🗑️ 삭제
-                </button>
-              </div>
-              <button
-                onClick={() => window.open(`/api/files/${selectedFile.id}/download`)}
-                className="w-full py-4 bg-blue-600 text-white rounded-2xl text-sm font-black shadow-lg"
-              >
-                📥 다운로드
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 모달: 파일 미리보기 (FilePreviewModal 컴포넌트 사용) */}
+      <FilePreviewModal
+        file={showFileDetail && selectedFile ? {
+          id: selectedFile.id,
+          originalName: selectedFile.originalName,
+          mimeType: selectedFile.mimeType,
+          size: selectedFile.size,
+        } : null}
+        onClose={() => setShowFileDetail(false)}
+      />
 
       {/* 모달: 공유 */}
       {showShareModal && (
@@ -587,7 +563,7 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   onClick={() => setShowShareModal(false)}
-                  className="flex-1 font-bold text-slate-400 text-sm"
+                  className="flex-1 font-bold text-slate-400 dark:text-slate-500 dark:text-slate-400 text-sm"
                 >
                   취소
                 </button>

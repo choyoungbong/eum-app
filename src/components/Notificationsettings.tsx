@@ -2,50 +2,43 @@
 
 import { useState, useEffect } from "react";
 import { registerFCMToken, unregisterFCMToken } from "@/lib/firebase";
+import { toast } from "@/components/Toast";
 
 export default function NotificationSettings() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // 알림 권한 상태 확인
     if ("Notification" in window) {
       setNotificationsEnabled(Notification.permission === "granted");
     }
   }, []);
 
   const handleToggle = async () => {
+    setLoading(true);
     if (notificationsEnabled) {
-      // 알림 비활성화
-      setLoading(true);
       await unregisterFCMToken();
       setNotificationsEnabled(false);
-      setLoading(false);
     } else {
-      // 알림 활성화
-      setLoading(true);
       const success = await registerFCMToken();
       setNotificationsEnabled(success);
-      setLoading(false);
-
       if (!success) {
-        alert("알림 권한을 허용해주세요");
+        // ✅ alert() → toast
+        toast.error("알림 권한을 허용해주세요. 브라우저 설정에서 알림을 허용할 수 있습니다.");
       }
     }
+    setLoading(false);
   };
 
   return (
     <div className="bg-white shadow rounded-lg p-6">
       <h3 className="text-lg font-semibold mb-4">📬 알림 설정</h3>
-      
+
       <div className="flex items-center justify-between">
         <div>
           <p className="font-medium">푸시 알림</p>
-          <p className="text-sm text-gray-500">
-            새 메시지와 통화 요청을 알림으로 받습니다
-          </p>
+          <p className="text-sm text-gray-500">새 메시지와 통화 요청을 알림으로 받습니다</p>
         </div>
-        
         <button
           onClick={handleToggle}
           disabled={loading}
@@ -69,7 +62,7 @@ export default function NotificationSettings() {
         </div>
       )}
 
-      {!notificationsEnabled && "Notification" in window && (
+      {"Notification" in window && !notificationsEnabled && (
         <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
           <p className="text-sm text-yellow-800">
             ⚠️ 알림이 비활성화되어 있습니다. 앱을 닫으면 메시지 알림을 받을 수 없습니다.

@@ -121,3 +121,33 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "서버 오류" }, { status: 500 });
   }
 }
+
+// DELETE /api/users/me — 계정 영구 삭제 (본인)
+export async function DELETE() {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
+    }
+
+    // 관리자 계정은 삭제 불가 (최후의 보루)
+    const user = await prisma.user.findUnique({ where: { id: session.user.id } });
+    if (user?.role === "ADMIN") {
+      const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
+      if (adminCount <= 1) {
+        return NextResponse.json(
+          { error: "마지막 관리자 계정은 삭제할 수 없습니다" },
+          { status: 400 }
+        );
+      }
+    }
+
+    // CASCADE로 파일, 게시글, 댓글 등 모두 삭제됨
+    await prisma.user.delete({ where: { id: session.user.id } });
+
+    return NextResponse.json({ message: "계정이 삭제되었습니다" });
+  } catch (error) {
+    console.error("DELETE /api/users/me error:", error);
+    return NextResponse.json({ error: "서버 오류가 발생했습니다" }, { status: 500 });
+  }
+}

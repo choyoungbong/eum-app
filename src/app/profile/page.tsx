@@ -3,7 +3,8 @@
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import Link from "next/link"
+import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { formatFileSize, storagePercent } from "@/lib/client-utils";
@@ -34,6 +35,12 @@ export default function ProfilePage() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [stats, setStats] = useState<UserStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [sendingVerification, setSendingVerification] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
+  const searchParams = useSearchParams();
+  const [showDeleteSection, setShowDeleteSection] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // 이름 변경 폼
   const [nameEdit, setNameEdit] = useState(false);
@@ -136,6 +143,34 @@ export default function ProfilePage() {
     }
   };
 
+  const sendVerificationEmail = async () => {
+    setSendingVerification(true);
+    try {
+      const res = await fetch("/api/auth/verify-email", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setVerificationSent(true);
+      toast.success("인증 이메일을 발송했습니다. 받은편지함을 확인해주세요.");
+    } catch (e: any) {
+      toast.error(e.message || "이메일 발송에 실패했습니다");
+    } finally {
+      setSendingVerification(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmText !== "계정삭제") return;
+    setIsDeleting(true);
+    try {
+      const res = await fetch("/api/users/me", { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      await signOut({ callbackUrl: "/" });
+    } catch {
+      toast.error("계정 삭제에 실패했습니다. 다시 시도해주세요.");
+      setIsDeleting(false);
+    }
+  };
+
   const handleLogout = () => {
     openConfirm({
       title: "로그아웃",
@@ -147,7 +182,7 @@ export default function ProfilePage() {
 
   if (status === "loading" || loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-slate-900">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
       </div>
     );
@@ -161,41 +196,44 @@ export default function ProfilePage() {
     usagePercent > 90 ? "bg-red-500" : usagePercent > 70 ? "bg-yellow-500" : "bg-blue-500";
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-900 dark:bg-slate-900">
       {confirmDialog}
 
       {/* 헤더 */}
-      <header className="bg-white shadow sticky top-0 z-10">
+      <header className="bg-white dark:bg-slate-800 shadow dark:shadow-slate-700/30 sticky top-0 z-10 border-b border-gray-100 dark:border-slate-700">
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/dashboard" className="text-gray-500 hover:text-gray-900 flex items-center gap-2 text-sm">
+          <Link href="/dashboard" className="text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 flex items-center gap-2 text-sm">
             ← 대시보드
           </Link>
-          <h1 className="text-lg font-bold text-gray-900">마이페이지</h1>
-          <button
-            onClick={handleLogout}
-            className="text-sm text-red-500 hover:text-red-700 font-medium"
-          >
-            로그아웃
-          </button>
+          <h1 className="text-lg font-bold text-gray-900 dark:text-slate-100">마이페이지</h1>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <button
+              onClick={handleLogout}
+              className="text-sm text-red-500 hover:text-red-700 font-medium"
+            >
+              로그아웃
+            </button>
+          </div>
         </div>
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
 
         {/* 프로필 카드 */}
-        <div className="bg-white rounded-xl shadow p-6">
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
           <div className="flex items-center gap-4 mb-6">
             {/* 아바타 */}
             <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-2xl font-bold flex-shrink-0">
               {user.name.charAt(0).toUpperCase()}
             </div>
             <div>
-              <h2 className="text-xl font-bold text-gray-900">{user.name}</h2>
-              <p className="text-gray-500 text-sm">{user.email}</p>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-slate-100">{user.name}</h2>
+              <p className="text-gray-500 dark:text-slate-400 text-sm">{user.email}</p>
               <span className={`inline-block mt-1 px-2 py-0.5 text-xs rounded-full font-medium ${
                 user.role === "ADMIN"
                   ? "bg-purple-100 text-purple-700"
-                  : "bg-gray-100 text-gray-600"
+                  : "bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-400"
               }`}>
                 {user.role === "ADMIN" ? "관리자" : "일반 사용자"}
               </span>
@@ -211,8 +249,8 @@ export default function ProfilePage() {
                 { label: "댓글", value: stats.totalComments.toLocaleString() },
               ].map(({ label, value }) => (
                 <div key={label} className="text-center">
-                  <p className="text-xl font-bold text-gray-900">{value}</p>
-                  <p className="text-xs text-gray-500">{label}</p>
+                  <p className="text-xl font-bold text-gray-900 dark:text-slate-100">{value}</p>
+                  <p className="text-xs text-gray-500 dark:text-slate-400">{label}</p>
                 </div>
               ))}
             </div>
@@ -221,26 +259,26 @@ export default function ProfilePage() {
 
         {/* 스토리지 */}
         {stats && (
-          <div className="bg-white rounded-xl shadow p-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">☁️ 스토리지 사용량</h3>
-            <div className="flex justify-between text-sm text-gray-600 mb-2">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-3">☁️ 스토리지 사용량</h3>
+            <div className="flex justify-between text-sm text-gray-600 dark:text-slate-400 mb-2">
               <span>{formatFileSize(stats.storageUsedBytes)} 사용 중</span>
-              <span className="text-gray-400">/ 5 GB</span>
+              <span className="text-gray-400 dark:text-slate-500">/ 5 GB</span>
             </div>
-            <div className="w-full bg-gray-100 rounded-full h-2.5">
+            <div className="w-full bg-gray-100 dark:bg-slate-700 rounded-full h-2.5">
               <div
                 className={`h-2.5 rounded-full transition-all ${storageColor}`}
                 style={{ width: `${usagePercent}%` }}
               />
             </div>
-            <p className="text-xs text-gray-400 mt-1.5">{usagePercent.toFixed(1)}% 사용</p>
+            <p className="text-xs text-gray-400 dark:text-slate-500 mt-1.5">{usagePercent.toFixed(1)}% 사용</p>
           </div>
         )}
 
         {/* 이름 변경 */}
-        <div className="bg-white rounded-xl shadow p-6">
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-gray-700">✏️ 이름 변경</h3>
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300">✏️ 이름 변경</h3>
             {!nameEdit && (
               <button
                 onClick={() => { setNameEdit(true); setNewName(user.name); }}
@@ -258,7 +296,7 @@ export default function ProfilePage() {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 maxLength={20}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 text-sm"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
                 placeholder="새 이름 입력"
                 autoFocus
                 onKeyDown={(e) => e.key === "Enter" && handleNameSave()}
@@ -266,7 +304,7 @@ export default function ProfilePage() {
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => { setNameEdit(false); setNewName(user.name); }}
-                  className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                  className="px-4 py-1.5 text-sm text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 dark:bg-slate-700 rounded-lg"
                 >
                   취소
                 </button>
@@ -280,14 +318,14 @@ export default function ProfilePage() {
               </div>
             </div>
           ) : (
-            <p className="text-gray-900 font-medium">{user.name}</p>
+            <p className="text-gray-900 dark:text-slate-100 font-medium">{user.name}</p>
           )}
         </div>
 
         {/* 비밀번호 변경 */}
-        <div className="bg-white rounded-xl shadow p-6">
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-gray-700">🔒 비밀번호 변경</h3>
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300">🔒 비밀번호 변경</h3>
             {!pwEdit && (
               <button
                 onClick={() => setPwEdit(true)}
@@ -301,33 +339,33 @@ export default function ProfilePage() {
           {pwEdit ? (
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-gray-500 mb-1 block">현재 비밀번호</label>
+                <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">현재 비밀번호</label>
                 <input
                   type="password"
                   value={currentPw}
                   onChange={(e) => setCurrentPw(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
                   placeholder="현재 비밀번호"
                   autoFocus
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-500 mb-1 block">새 비밀번호</label>
+                <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">새 비밀번호</label>
                 <input
                   type="password"
                   value={newPw}
                   onChange={(e) => setNewPw(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
                   placeholder="새 비밀번호 (최소 8자)"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-500 mb-1 block">새 비밀번호 확인</label>
+                <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">새 비밀번호 확인</label>
                 <input
                   type="password"
                   value={confirmPw}
                   onChange={(e) => setConfirmPw(e.target.value)}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 text-sm ${
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm ${
                     confirmPw && newPw !== confirmPw
                       ? "border-red-400"
                       : "border-gray-300"
@@ -341,7 +379,7 @@ export default function ProfilePage() {
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => { setPwEdit(false); setCurrentPw(""); setNewPw(""); setConfirmPw(""); }}
-                  className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                  className="px-4 py-1.5 text-sm text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 dark:bg-slate-700 rounded-lg"
                 >
                   취소
                 </button>
@@ -355,19 +393,34 @@ export default function ProfilePage() {
               </div>
             </div>
           ) : (
-            <p className="text-gray-400 text-sm">••••••••</p>
+            <p className="text-gray-400 dark:text-slate-500 text-sm">••••••••</p>
           )}
         </div>
 
         {/* 계정 정보 */}
-        <div className="bg-white rounded-xl shadow p-6">
-          <h3 className="text-sm font-semibold text-gray-700 mb-4">📋 계정 정보</h3>
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-4">📋 계정 정보</h3>
           <dl className="space-y-3 text-sm">
             {[
               { label: "이메일", value: user.email },
               {
                 label: "이메일 인증",
-                value: user.emailVerified ? "✅ 인증 완료" : "⚠️ 미인증",
+                value: user.emailVerified
+                  ? "✅ 인증 완료"
+                  : "⚠️ 미인증",
+                extra: !user.emailVerified && (
+                  <button
+                    onClick={sendVerificationEmail}
+                    disabled={sendingVerification || verificationSent}
+                    className="mt-1 text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+                  >
+                    {verificationSent
+                      ? "발송됨 ✓"
+                      : sendingVerification
+                      ? "발송 중..."
+                      : "인증 이메일 재발송"}
+                  </button>
+                ),
               },
               {
                 label: "가입일",
@@ -379,22 +432,26 @@ export default function ProfilePage() {
               },
             ].map(({ label, value }) => (
               <div key={label} className="flex justify-between">
-                <dt className="text-gray-500">{label}</dt>
-                <dd className="font-medium text-gray-900">{value}</dd>
+                <dt className="text-gray-500 dark:text-slate-400">{label}</dt>
+                <dd className="font-medium text-gray-900 dark:text-slate-100">{value}</dd>
               </div>
             ))}
           </dl>
         </div>
 
         {/* 빠른 이동 */}
-        <div className="bg-white rounded-xl shadow p-6">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">🔗 바로가기</h3>
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-3">🔗 바로가기</h3>
           <div className="grid grid-cols-2 gap-2">
             {[
               { href: "/dashboard", label: "📁 파일 관리", color: "bg-blue-50 text-blue-700 hover:bg-blue-100" },
               { href: "/posts", label: "📝 게시글", color: "bg-green-50 text-green-700 hover:bg-green-100" },
               { href: "/chat", label: "💬 채팅", color: "bg-purple-50 text-purple-700 hover:bg-purple-100" },
               { href: "/search", label: "🔍 검색", color: "bg-orange-50 text-orange-700 hover:bg-orange-100" },
+              { href: "/notifications", label: "🔔 알림", color: "bg-gray-50 dark:bg-slate-900 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 dark:bg-slate-700" },
+              ...(user.role === "ADMIN"
+                ? [{ href: "/admin", label: "🛡️ 관리자", color: "bg-red-50 text-red-700 hover:bg-red-100" }]
+                : []),
             ].map(({ href, label, color }) => (
               <Link
                 key={href}
@@ -408,13 +465,49 @@ export default function ProfilePage() {
         </div>
 
         {/* 로그아웃 버튼 */}
-        <div className="pb-8">
+        <div>
           <button
             onClick={handleLogout}
-            className="w-full py-3 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-xl border border-red-200 transition"
+            className="w-full py-3 text-sm font-medium text-red-600 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-xl border border-red-200 dark:border-red-800 transition"
           >
             로그아웃
           </button>
+        </div>
+
+        {/* 계정 삭제 */}
+        <div className="pb-8">
+          <button
+            onClick={() => setShowDeleteSection(!showDeleteSection)}
+            className="w-full py-2 text-xs text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition"
+          >
+            {showDeleteSection ? "▲ 접기" : "계정 삭제..."}
+          </button>
+
+          {showDeleteSection && (
+            <div className="mt-3 p-4 rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 space-y-3">
+              <p className="text-sm font-semibold text-red-700 dark:text-red-400">⚠️ 계정 영구 삭제</p>
+              <p className="text-xs text-red-600 dark:text-red-400">
+                계정을 삭제하면 모든 파일, 게시글, 댓글, 채팅 내역이 <strong>영구적으로 삭제</strong>되며 복구할 수 없습니다.
+              </p>
+              <p className="text-xs text-gray-600 dark:text-slate-400">
+                확인을 위해 아래에 <strong className="text-red-600">"계정삭제"</strong> 를 입력하세요.
+              </p>
+              <input
+                type="text"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                placeholder="계정삭제"
+                className="w-full border border-red-300 dark:border-red-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white dark:bg-slate-800 dark:text-slate-100"
+              />
+              <button
+                onClick={handleDeleteAccount}
+                disabled={deleteConfirmText !== "계정삭제" || isDeleting}
+                className="w-full py-2.5 text-sm font-bold text-white bg-red-500 hover:bg-red-600 disabled:bg-gray-300 dark:disabled:bg-slate-600 disabled:cursor-not-allowed rounded-lg transition"
+              >
+                {isDeleting ? "삭제 중..." : "계정 영구 삭제"}
+              </button>
+            </div>
+          )}
         </div>
       </main>
     </div>

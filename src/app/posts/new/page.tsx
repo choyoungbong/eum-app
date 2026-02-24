@@ -4,6 +4,7 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { toast } from "@/components/Toast";
 
 export default function NewPostPage() {
   const { data: session, status } = useSession();
@@ -17,9 +18,7 @@ export default function NewPostPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (status === "unauthenticated") {
-      router.push("/login");
-    }
+    if (status === "unauthenticated") router.push("/login");
   }, [status, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -42,10 +41,10 @@ export default function NewPostPage() {
         return;
       }
 
-      alert("게시글이 작성되었습니다!");
+      // ✅ alert() → toast (작성 완료 후 바로 이동하므로 toast.success로 충분)
+      toast.success("게시글이 작성되었습니다");
       router.push(`/posts/${data.post.id}`);
-    } catch (err) {
-      console.error("Post create error:", err);
+    } catch {
       setError("작성 중 오류가 발생했습니다");
       setLoading(false);
     }
@@ -63,7 +62,6 @@ export default function NewPostPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* 헤더 */}
       <header className="bg-white shadow">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center gap-4">
@@ -75,7 +73,6 @@ export default function NewPostPage() {
         </div>
       </header>
 
-      {/* 메인 */}
       <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-white rounded-lg shadow p-6">
           {error && (
@@ -85,34 +82,24 @@ export default function NewPostPage() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* 제목 */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                제목
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">제목</label>
               <input
                 type="text"
                 value={formData.title}
-                onChange={(e) =>
-                  setFormData({ ...formData, title: e.target.value })
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
                 placeholder="제목을 입력하세요"
                 required
               />
             </div>
 
-            {/* 공개 설정 */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                공개 설정
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">공개 설정</label>
               <select
                 value={formData.visibility}
-                onChange={(e) =>
-                  setFormData({ ...formData, visibility: e.target.value })
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onChange={(e) => setFormData({ ...formData, visibility: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
               >
                 <option value="PRIVATE">비공개</option>
                 <option value="SHARED">공유</option>
@@ -120,24 +107,18 @@ export default function NewPostPage() {
               </select>
             </div>
 
-            {/* 내용 */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                내용
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">내용</label>
               <textarea
                 value={formData.content}
-                onChange={(e) =>
-                  setFormData({ ...formData, content: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, content: e.target.value })}
                 rows={15}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
                 placeholder="내용을 입력하세요"
                 required
               />
             </div>
 
-            {/* 버튼 */}
             <div className="flex justify-end gap-2">
               <Link
                 href="/posts"
@@ -148,7 +129,7 @@ export default function NewPostPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400"
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 transition"
               >
                 {loading ? "작성 중..." : "작성하기"}
               </button>

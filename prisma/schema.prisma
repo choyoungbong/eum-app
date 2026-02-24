@@ -94,6 +94,9 @@ model User {
   
   passwordResetTokens PasswordResetToken[]
 
+  notifications             Notification[]
+  emailVerificationTokens   EmailVerificationToken[]
+
   @@map("users")
 }
 

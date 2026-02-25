@@ -64,6 +64,36 @@ enum NetworkType {
   OFFLINE
 }
 
+enum NotificationType {
+  COMMENT
+  SHARE
+  CHAT
+  SYSTEM
+  FILE_UPLOAD
+  CALL
+}
+
+enum ActivityAction {
+  FILE_UPLOAD
+  FILE_DELETE
+  FILE_DOWNLOAD
+  FILE_SHARE
+  FOLDER_CREATE
+  FOLDER_DELETE
+  POST_CREATE
+  POST_DELETE
+  COMMENT_CREATE
+  COMMENT_DELETE
+  PROFILE_UPDATE
+  PASSWORD_CHANGE
+  LOGIN
+  LOGOUT
+  CHAT_MESSAGE
+  CALL_START
+  CALL_END
+}
+
+
 model User {
   id            String    @id @default(cuid())
   email         String    @unique
@@ -77,6 +107,11 @@ model User {
   isOnline      Boolean   @default(false) @map("is_online")
   lastSeenAt    DateTime? @map("last_seen_at")
   fcmToken      String?   @map("fcm_token")
+  notificationPrefs Json?     @map("notification_prefs")
+  twoFactorEnabled  Boolean  @default(false) @map("two_factor_enabled")
+  twoFactorSecret   String?  @map("two_factor_secret")
+  twoFactorBackups  String[] @map("two_factor_backups")  // 백업 코드
+
   networkType   NetworkType @default(OFFLINE) @map("network_type")
   
   files                File[]
@@ -93,9 +128,11 @@ model User {
   callsReceived        Call[] @relation("CallReceiver")
   
   passwordResetTokens PasswordResetToken[]
-
-  notifications             Notification[]
+  
+  notifications             Notification[]   
   emailVerificationTokens   EmailVerificationToken[]
+
+  activityLogs  ActivityLog[]
 
   @@map("users")
 }
@@ -342,21 +379,6 @@ model PasswordResetToken {
   @@map("password_reset_tokens")
 }
 
-// 1) enum 추가 (다른 enum 옆에)
-enum NotificationType {
-  COMMENT
-  SHARE
-  CHAT
-  SYSTEM
-  FILE_UPLOAD
-  CALL
-}
-
-// 2) User 모델에 관계 추가
-//    sentMessages ChatMessage[] ... 뒤에:
-//    notifications Notification[]
-
-// 3) 새 모델 추가
 model Notification {
   id        String           @id @default(cuid())
   userId    String           @map("user_id")
@@ -375,9 +397,6 @@ model Notification {
   @@map("notifications")
 }
 
-// prisma/schema.prisma 에 추가할 내용
-// User 모델에: emailVerificationTokens EmailVerificationToken[] 추가
-
 model EmailVerificationToken {
   id        String   @id @default(cuid())
   userId    String   @map("user_id")
@@ -390,4 +409,21 @@ model EmailVerificationToken {
   @@index([userId])
   @@index([token])
   @@map("email_verification_tokens")
+}
+
+model ActivityLog {
+  id        String         @id @default(cuid())
+  userId    String         @map("user_id")
+  action    ActivityAction
+  target    String?
+  targetId  String?        @map("target_id")
+  meta      Json?
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt(sort: Desc)])
+  @@index([action])
+  @@map("activity_logs")
 }

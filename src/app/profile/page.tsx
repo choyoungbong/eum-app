@@ -449,6 +449,9 @@ export default function ProfilePage() {
               { href: "/chat", label: "💬 채팅", color: "bg-purple-50 text-purple-700 hover:bg-purple-100" },
               { href: "/search", label: "🔍 검색", color: "bg-orange-50 text-orange-700 hover:bg-orange-100" },
               { href: "/notifications", label: "🔔 알림", color: "bg-gray-50 dark:bg-slate-900 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 dark:bg-slate-700" },
+              { href: "/settings/sessions", label: "💻 로그인 기기", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-600" },
+              { href: "/trash", label: "🗑️ 휴지통", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-600" },
+              { href: "/users/search", label: "👥 사용자 검색", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-600" },
               { href: "/settings/2fa", label: "🔐 2단계 인증", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-600" },
               ...(user.role === "ADMIN"
                 ? [{ href: "/admin", label: "🛡️ 관리자", color: "bg-red-50 text-red-700 hover:bg-red-100" }]

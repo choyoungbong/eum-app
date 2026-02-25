@@ -136,6 +136,11 @@ model User {
 
   following  Follow[] @relation("Follower")
   followers  Follow[] @relation("Following")
+
+  postLikes      PostLike[]
+  postBookmarks  PostBookmark[]
+  sessions       UserSession[]
+
   
   @@map("users")
 }
@@ -259,6 +264,9 @@ model File {
   // ✅ 추가됨: ChatMessage와의 역관계
   chatMessages    ChatMessage[]
 
+  publicToken   String?   @unique @map("public_token")   // 공개 공유 토큰
+  deletedAt     DateTime? @map("deleted_at")             // 휴지통 soft delete
+
   @@index([userId])
   @@index([folderId])
   @@map("files")
@@ -331,7 +339,10 @@ model Post {
   user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   comments        Comment[]
   postTags        PostTag[]
-  
+
+  likes      PostLike[]
+  bookmarks  PostBookmark[]
+
   @@index([userId])
   @@map("posts")
 }
@@ -444,4 +455,50 @@ model Follow {
   @@index([followerId])
   @@index([followingId])
   @@map("follows")
+}
+
+model PostLike {
+  id        String   @id @default(cuid())
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([postId])
+  @@index([userId])
+  @@map("post_likes")
+}
+
+model PostBookmark {
+  id        String   @id @default(cuid())
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([postId])
+  @@index([userId])
+  @@map("post_bookmarks")
+}
+
+model UserSession {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  token      String   @unique                // NextAuth session token
+  userAgent  String?  @map("user_agent")
+  ip         String?
+  lastActive DateTime @default(now()) @map("last_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("user_sessions")
 }

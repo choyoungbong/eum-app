@@ -2,6 +2,7 @@
 
 import { SessionProvider } from "next-auth/react";
 import { ThemeProvider } from "next-themes";
+import KeyboardShortcuts from "@/components/KeyboardShortcuts";
 import { ReactNode } from "react";
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -20,6 +21,7 @@ export function Providers({ children }: { children: ReactNode }) {
         storageKey="eum-theme"
       >
         {children}
+        <KeyboardShortcuts />
       </ThemeProvider>
     </SessionProvider>
   );

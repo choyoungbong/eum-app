@@ -137,12 +137,12 @@ async function checkIsDescendant(
       return true;
     }
 
-    const folder = await prisma.folder.findUnique({
+    const folder: { parentId: string | null } | null = await prisma.folder.findUnique({
       where: { id: currentId },
       select: { parentId: true },
     });
 
-    currentId = folder?.parentId || null;
+    currentId = folder?.parentId ?? null;
   }
 
   return false;

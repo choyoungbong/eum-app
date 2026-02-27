@@ -1,0 +1,23 @@
+# .dockerignore
+node_modules
+.next
+.git
+.github
+*.log
+logs/
+storage/
+playwright-report/
+coverage/
+.env
+.env.local
+.env.development
+.env.test
+README.md
+CHANGELOG.md
+docker-compose*.yml
+*.sh
+e2e/
+__tests__/
+*.spec.ts
+*.test.ts
+*.test.tsx

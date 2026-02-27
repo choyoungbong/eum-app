@@ -75,7 +75,7 @@ export async function GET(
     // 썸네일이 이미 존재하면 반환
     if (existsSync(thumbnailPath)) {
       const thumbnailBuffer = await sharp(thumbnailPath).toBuffer();
-      return new NextResponse(thumbnailBuffer, {
+      return new NextResponse(new Uint8Array(thumbnailBuffer), {
         headers: {
           "Content-Type": "image/jpeg",
           "Cache-Control": "public, max-age=31536000",
@@ -116,7 +116,7 @@ export async function GET(
       },
     });
 
-    return new NextResponse(thumbnailBuffer, {
+    return new NextResponse(new Uint8Array(thumbnailBuffer), {
       headers: {
         "Content-Type": "image/jpeg",
         "Cache-Control": "public, max-age=31536000",

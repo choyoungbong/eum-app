@@ -1,5 +1,6 @@
+"use client";
 // src/app/offline/page.tsx
-// 오프라인 폴백 페이지 (서비스 워커가 /offline으로 리다이렉트)
+// ✅ 수정: "use client" 추가 — onClick 핸들러가 있어 Server Component로 렌더링 불가
 
 export default function OfflinePage() {
   return (

@@ -4,7 +4,6 @@ import { useSession } from "next-auth/react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useChatRoom } from "@/hooks/useSocket";
-import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { toast } from "@/components/Toast";
 
 const MESSAGE_LIMIT = 30; // 한 번에 불러올 메시지 수
@@ -131,11 +130,14 @@ export default function ChatRoomPage() {
   }, [chatRoomId, isLoadingMore]);
 
   // ✅ useInfiniteScroll — 스크롤 맨 위에 닿으면 fetchMoreMessages 실행
-  const topObserverRef = useInfiniteScroll({
-    fetchMore: fetchMoreMessages,
-    hasMore,
-    loading: isLoadingMore,
-  });
+  const topObserverRef = useCallback((el: HTMLDivElement | null) => {
+  if (!el) return;
+  const observer = new IntersectionObserver(([entry]) => {
+    if (entry.isIntersecting && hasMore && !isLoadingMore) fetchMoreMessages();
+  }, { rootMargin: "100px" });
+  observer.observe(el);
+  return () => observer.disconnect();
+}, [hasMore, isLoadingMore, fetchMoreMessages]);
 
   // ─── 실시간 메시지 추가 ───────────────────────────────────
   useEffect(() => {

@@ -1,4 +1,8 @@
-export const dynamic = 'force-dynamic';
+// src/app/api/files/shared/route.ts
+// ⚠️ 수정: SharedResource 모델에 file 직접 관계 없음
+//    resourceId로 별도 File 조회로 변경
+
+export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
@@ -9,64 +13,60 @@ export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
-      return NextResponse.json(
-        { error: "인증이 필요합니다" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
-    // 공유받은 파일 조회
+    // 1. 공유받은 리소스 조회 (FILE 타입만)
     const sharedResources = await prisma.sharedResource.findMany({
       where: {
         resourceType: "FILE",
         sharedWithId: session.user.id,
       },
       include: {
-        file: {
-          select: {
-            id: true,
-            filename: true,
-            originalName: true,
-            size: true,
-            mimeType: true,
-            thumbnailUrl: true,
-            createdAt: true,
-            user: {
-              select: {
-                name: true,
-                email: true,
-              },
-            },
-          },
-        },
-        owner: {
-          select: {
-            name: true,
-            email: true,
-          },
-        },
+        owner: { select: { name: true, email: true } },
       },
-      orderBy: {
-        createdAt: "desc",
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (sharedResources.length === 0) {
+      return NextResponse.json({ files: [] });
+    }
+
+    // 2. resourceId로 파일 정보 별도 조회
+    const fileIds = sharedResources.map((sr) => sr.resourceId);
+    const files = await prisma.file.findMany({
+      where:  { id: { in: fileIds }, deletedAt: null },
+      select: {
+        id: true, filename: true, originalName: true,
+        size: true, mimeType: true, thumbnailUrl: true, createdAt: true,
+        user: { select: { name: true, email: true } },
       },
     });
 
-    // 파일 정보 변환
-    const files = sharedResources.map((share) => ({
-      id: share.file?.id,
-      filename: share.file?.filename,
-      originalName: share.file?.originalName,
-      size: share.file?.size.toString(),
-      mimeType: share.file?.mimeType,
-      thumbnailUrl: share.file?.thumbnailUrl,
-      createdAt: share.file?.createdAt,
-      sharedBy: share.owner.name,
-      sharedByEmail: share.owner.email,
-      permission: share.permission,
-      sharedAt: share.createdAt,
-    }));
+    const fileMap = Object.fromEntries(files.map((f) => [f.id, f]));
 
-    return NextResponse.json({ files });
+    // 3. 조합
+    const result = sharedResources
+      .map((share) => {
+        const file = fileMap[share.resourceId];
+        if (!file) return null;
+        return {
+          id:            file.id,
+          filename:      file.filename,
+          originalName:  file.originalName,
+          size:          file.size.toString(),
+          mimeType:      file.mimeType,
+          thumbnailUrl:  file.thumbnailUrl,
+          createdAt:     file.createdAt,
+          sharedBy:      share.owner.name,
+          sharedByEmail: share.owner.email,
+          permission:    share.permission,
+          sharedAt:      share.createdAt,
+        };
+      })
+      .filter(Boolean);
+
+    return NextResponse.json({ files: result });
 
   } catch (error) {
     console.error("Shared files fetch error:", error);

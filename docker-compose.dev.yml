@@ -1,0 +1,24 @@
+# docker-compose.dev.yml — 로컬 개발 오버라이드
+# 사용: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  app:
+    build:
+      target: deps          # 의존성 레이어까지만
+    command: npm run dev
+    environment:
+      NODE_ENV: development
+    volumes:
+      - .:/app              # 소스 코드 마운트 (핫 리로드)
+      - /app/node_modules   # node_modules는 컨테이너 것 사용
+      - /app/.next
+    ports:
+      - "3000:3000"
+
+  db:
+    ports:
+      - "5432:5432"         # 개발 시 외부에서 접근 가능
+
+  # 개발 시 Nginx 불필요
+  nginx:
+    profiles: ["production"]

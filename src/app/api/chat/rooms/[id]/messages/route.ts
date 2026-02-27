@@ -116,7 +116,7 @@ export async function POST(
     if (type === "FILE" && fileId) {
       for (const member of members) {
         if (member.userId !== session.user.id) {
-          await prisma.filePermission.upsert({
+          await prisma.sharedResource.upsert({
             where: {
               resourceType_resourceId_sharedWithId: {
                 resourceType: "FILE",

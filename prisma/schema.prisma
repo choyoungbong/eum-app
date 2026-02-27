@@ -1,4 +1,5 @@
 // prisma/schema.prisma
+// 전체 완성본 — 기존 파일을 이것으로 교체하세요
 
 generator client {
   provider = "prisma-client-js"
@@ -9,6 +10,8 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ── Enums ────────────────────────────────────────────────
+
 enum Role {
   USER
   ADMIN
@@ -18,19 +21,19 @@ enum ResourceType {
   FILE
   FOLDER
   POST
-  CHATROOM
+  CHATROOM   // 기존 데이터 보존
 }
 
 enum Permission {
   VIEW
   EDIT
-  ADMIN
+  ADMIN      // 기존 데이터 보존
 }
 
 enum Visibility {
+  PUBLIC
   PRIVATE
   SHARED
-  PUBLIC
 }
 
 enum ChatRoomType {
@@ -41,16 +44,18 @@ enum ChatRoomType {
 enum MessageType {
   TEXT
   FILE
-  CALL_LOG
   SYSTEM
+  CALL
+  CALL_LOG   // 기존 데이터 보존
 }
 
 enum CallStatus {
   PENDING
-  ACCEPTED
-  REJECTED
-  MISSED
+  ACTIVE
   ENDED
+  MISSED
+  ACCEPTED   // 기존 데이터 보존
+  REJECTED   // 기존 데이터 보존
 }
 
 enum CallType {
@@ -59,9 +64,9 @@ enum CallType {
 }
 
 enum NetworkType {
+  OFFLINE
   WIFI
   CELLULAR
-  OFFLINE
 }
 
 enum NotificationType {
@@ -93,6 +98,7 @@ enum ActivityAction {
   CALL_END
 }
 
+// ── Models ───────────────────────────────────────────────
 
 model User {
   id            String    @id @default(cuid())
@@ -103,17 +109,33 @@ model User {
   emailVerified Boolean   @default(false) @map("email_verified")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
-  
-  isOnline      Boolean   @default(false) @map("is_online")
-  lastSeenAt    DateTime? @map("last_seen_at")
-  fcmToken      String?   @map("fcm_token")
-  notificationPrefs Json?     @map("notification_prefs")
-  twoFactorEnabled  Boolean  @default(false) @map("two_factor_enabled")
-  twoFactorSecret   String?  @map("two_factor_secret")
-  twoFactorBackups  String[] @map("two_factor_backups")  // 백업 코드
 
+  isOnline      Boolean     @default(false) @map("is_online")
+  lastSeenAt    DateTime?   @map("last_seen_at")
+  fcmToken      String?     @map("fcm_token")
+  notificationPrefs Json?   @map("notification_prefs")
+  twoFactorEnabled  Boolean @default(false) @map("two_factor_enabled")
+  twoFactorSecret   String? @map("two_factor_secret")
+  twoFactorBackups  String[] @map("two_factor_backups")
   networkType   NetworkType @default(OFFLINE) @map("network_type")
-  
+
+  // 스토리지
+  storageUsed   BigInt  @default(0)          @map("storage_used")
+  storageLimit  BigInt  @default(5368709120) @map("storage_limit")
+
+  // 계정 상태
+  isBanned      Boolean   @default(false) @map("is_banned")
+  banReason     String?   @map("ban_reason")
+  bannedAt      DateTime? @map("banned_at")
+
+  // 온보딩
+  onboardingDone Boolean @default(false) @map("onboarding_done")
+
+  // 프로필 이미지
+  avatarUrl     String? @map("avatar_url")
+  coverUrl      String? @map("cover_url")
+
+  // 관계
   files                File[]
   folders              Folder[]
   posts                Post[]
@@ -121,54 +143,49 @@ model User {
   sharedResources      SharedResource[] @relation("SharedWith")
   ownedSharedResources SharedResource[] @relation("Owner")
   savedSearches        SavedSearch[]
-  
   chatRoomMembers      ChatRoomMember[]
   sentMessages         ChatMessage[]
   callsInitiated       Call[] @relation("CallInitiator")
   callsReceived        Call[] @relation("CallReceiver")
-  
-  passwordResetTokens PasswordResetToken[]
-  
-  notifications             Notification[]   
-  emailVerificationTokens   EmailVerificationToken[]
+  passwordResetTokens  PasswordResetToken[]
+  notifications        Notification[]
+  emailVerificationTokens EmailVerificationToken[]
+  activityLogs         ActivityLog[]
+  following            Follow[] @relation("Follower")
+  followers            Follow[] @relation("Following")
+  postLikes            PostLike[]
+  postBookmarks        PostBookmark[]
+  sessions             UserSession[]
+  apiKeys              ApiKey[]
+  fileVersions         FileVersion[]
 
-  activityLogs  ActivityLog[]
-
-  following  Follow[] @relation("Follower")
-  followers  Follow[] @relation("Following")
-
-  postLikes      PostLike[]
-  postBookmarks  PostBookmark[]
-  sessions       UserSession[]
-
-  
   @@map("users")
 }
 
 model ChatRoom {
   id        String       @id @default(cuid())
-  name      String?      
+  name      String?
   type      ChatRoomType @default(DIRECT)
   createdAt DateTime     @default(now()) @map("created_at")
   updatedAt DateTime     @updatedAt @map("updated_at")
-  
-  members   ChatRoomMember[]
-  messages  ChatMessage[]
-  calls     Call[]
-  
+
+  members  ChatRoomMember[]
+  messages ChatMessage[]
+  calls    Call[]
+
   @@map("chat_rooms")
 }
 
 model ChatRoomMember {
-  id         String   @id @default(cuid())
-  chatRoomId String   @map("chat_room_id")
-  userId     String   @map("user_id")
-  joinedAt   DateTime @default(now()) @map("joined_at")
+  id         String    @id @default(cuid())
+  chatRoomId String    @map("chat_room_id")
+  userId     String    @map("user_id")
+  joinedAt   DateTime  @default(now()) @map("joined_at")
   lastReadAt DateTime? @map("last_read_at")
-  
-  chatRoom   ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+
+  chatRoom ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@unique([chatRoomId, userId])
   @@index([chatRoomId])
   @@index([userId])
@@ -180,39 +197,38 @@ model ChatMessage {
   chatRoomId String      @map("chat_room_id")
   senderId   String      @map("sender_id")
   type       MessageType @default(TEXT)
-  content    String?     
+  content    String?
   fileId     String?     @map("file_id")
   callId     String?     @map("call_id")
   createdAt  DateTime    @default(now()) @map("created_at")
-  
-  chatRoom   ChatRoom    @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
-  sender     User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
-  
-  // ✅ 추가됨: File과의 관계
-  file       File?       @relation(fields: [fileId], references: [id], onDelete: SetNull)
+
+  chatRoom ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  sender   User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  file     File?    @relation(fields: [fileId], references: [id], onDelete: SetNull)
 
   @@index([chatRoomId])
   @@index([senderId])
   @@index([createdAt])
+  @@index([chatRoomId, createdAt(sort: Desc)])
   @@map("chat_messages")
 }
 
 model Call {
-  id           String     @id @default(cuid())
-  chatRoomId   String     @map("chat_room_id")
-  initiatorId  String     @map("initiator_id")
-  receiverId   String     @map("receiver_id")
-  type         CallType   @default(VOICE)
-  status       CallStatus @default(PENDING)
-  startedAt    DateTime?  @map("started_at")
-  endedAt      DateTime?  @map("ended_at")
-  duration     Int?
-  createdAt    DateTime   @default(now()) @map("created_at")
-  
-  chatRoom     ChatRoom   @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
-  initiator    User       @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
-  receiver     User       @relation("CallReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
-  
+  id          String     @id @default(cuid())
+  chatRoomId  String     @map("chat_room_id")
+  initiatorId String     @map("initiator_id")
+  receiverId  String     @map("receiver_id")
+  type        CallType   @default(VOICE)
+  status      CallStatus @default(PENDING)
+  startedAt   DateTime?  @map("started_at")
+  endedAt     DateTime?  @map("ended_at")
+  duration    Int?
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  chatRoom  ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  initiator User     @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  receiver  User     @relation("CallReceiver",  fields: [receiverId],  references: [id], onDelete: Cascade)
+
   @@index([chatRoomId])
   @@index([initiatorId])
   @@index([receiverId])
@@ -229,12 +245,12 @@ model Folder {
   icon      String?
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
-  
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  parent    Folder?  @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
-  children  Folder[] @relation("FolderHierarchy")
-  files     File[]
-  
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent   Folder?  @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children Folder[] @relation("FolderHierarchy")
+  files    File[]
+
   @@index([userId])
   @@index([parentId])
   @@map("folders")
@@ -256,19 +272,36 @@ model File {
   folderId        String?   @map("folder_id")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
-  
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  folder          Folder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  fileTags        FileTag[]
-  
-  // ✅ 추가됨: ChatMessage와의 역관계
-  chatMessages    ChatMessage[]
 
-  publicToken   String?   @unique @map("public_token")   // 공개 공유 토큰
-  deletedAt     DateTime? @map("deleted_at")             // 휴지통 soft delete
+  // 공개 공유
+  publicToken   String?  @unique @map("public_token")
+
+  // 휴지통
+  deletedAt     DateTime? @map("deleted_at")
+
+  // 암호화
+  encryptedKey  String?  @map("encrypted_key")
+  isEncrypted   Boolean  @default(false) @map("is_encrypted")
+
+  // 즐겨찾기 / 핀
+  isStarred     Boolean  @default(false) @map("is_starred")
+  isPinned      Boolean  @default(false) @map("is_pinned")
+
+  // 관계
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder       Folder?      @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  fileTags     FileTag[]
+  chatMessages ChatMessage[]
+  fileVersions FileVersion[]
 
   @@index([userId])
   @@index([folderId])
+  @@index([userId, deletedAt])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, isStarred])
+  @@index([userId, isPinned])
+  @@index([publicToken])
+  @@index([hash])
   @@map("files")
 }
 
@@ -277,10 +310,10 @@ model Tag {
   name      String   @unique
   color     String?
   createdAt DateTime @default(now()) @map("created_at")
-  
-  fileTags  FileTag[]
-  postTags  PostTag[]
-  
+
+  fileTags FileTag[]
+  postTags PostTag[]
+
   @@map("tags")
 }
 
@@ -289,10 +322,10 @@ model FileTag {
   fileId    String   @map("file_id")
   tagId     String   @map("tag_id")
   createdAt DateTime @default(now()) @map("created_at")
-  
-  file      File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
-  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
-  
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
   @@unique([fileId, tagId])
   @@index([fileId])
   @@index([tagId])
@@ -304,10 +337,10 @@ model PostTag {
   postId    String   @map("post_id")
   tagId     String   @map("tag_id")
   createdAt DateTime @default(now()) @map("created_at")
-  
-  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
-  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
-  
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
   @@unique([postId, tagId])
   @@index([postId])
   @@index([tagId])
@@ -320,9 +353,9 @@ model SavedSearch {
   query     Json
   userId    String   @map("user_id")
   createdAt DateTime @default(now()) @map("created_at")
-  
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
   @@map("saved_searches")
 }
@@ -335,15 +368,16 @@ model Post {
   userId     String     @map("user_id")
   createdAt  DateTime   @default(now()) @map("created_at")
   updatedAt  DateTime   @updatedAt @map("updated_at")
-  
-  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  comments        Comment[]
-  postTags        PostTag[]
 
-  likes      PostLike[]
-  bookmarks  PostBookmark[]
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comments  Comment[]
+  postTags  PostTag[]
+  likes     PostLike[]
+  bookmarks PostBookmark[]
 
   @@index([userId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([visibility, createdAt(sort: Desc)])
   @@map("posts")
 }
 
@@ -353,10 +387,10 @@ model Comment {
   postId    String   @map("post_id")
   userId    String   @map("user_id")
   createdAt DateTime @default(now()) @map("created_at")
-  
-  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([postId])
   @@index([userId])
   @@map("comments")
@@ -370,10 +404,10 @@ model SharedResource {
   sharedWithId String       @map("shared_with_id")
   permission   Permission   @default(VIEW)
   createdAt    DateTime     @default(now()) @map("created_at")
-  
-  owner        User         @relation("Owner", fields: [ownerId], references: [id], onDelete: Cascade)
-  sharedWith   User         @relation("SharedWith", fields: [sharedWithId], references: [id], onDelete: Cascade)
-  
+
+  owner      User @relation("Owner",      fields: [ownerId],      references: [id], onDelete: Cascade)
+  sharedWith User @relation("SharedWith", fields: [sharedWithId], references: [id], onDelete: Cascade)
+
   @@unique([resourceType, resourceId, sharedWithId])
   @@index([ownerId])
   @@index([sharedWithId])
@@ -408,6 +442,8 @@ model Notification {
   @@index([userId])
   @@index([isRead])
   @@index([createdAt])
+  @@index([userId, isRead])
+  @@index([userId, createdAt(sort: Desc)])
   @@map("notifications")
 }
 
@@ -444,8 +480,8 @@ model ActivityLog {
 
 model Follow {
   id          String   @id @default(cuid())
-  followerId  String   @map("follower_id")   // 팔로우 하는 사람
-  followingId String   @map("following_id")  // 팔로우 받는 사람
+  followerId  String   @map("follower_id")
+  followingId String   @map("following_id")
   createdAt   DateTime @default(now()) @map("created_at")
 
   follower  User @relation("Follower",  fields: [followerId],  references: [id], onDelete: Cascade)
@@ -490,7 +526,7 @@ model PostBookmark {
 model UserSession {
   id         String   @id @default(cuid())
   userId     String   @map("user_id")
-  token      String   @unique                // NextAuth session token
+  token      String   @unique
   userAgent  String?  @map("user_agent")
   ip         String?
   lastActive DateTime @default(now()) @map("last_active")
@@ -501,4 +537,54 @@ model UserSession {
   @@index([userId])
   @@index([token])
   @@map("user_sessions")
+}
+
+model FileVersion {
+  id         String   @id @default(cuid())
+  fileId     String   @map("file_id")
+  versionNum Int      @map("version_num")
+  filepath   String
+  size       BigInt
+  createdBy  String   @map("created_by")
+  comment    String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([fileId])
+  @@index([fileId, versionNum(sort: Desc)])
+  @@map("file_versions")
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  name       String
+  keyHash    String    @unique @map("key_hash")
+  keyPrefix  String    @map("key_prefix")
+  scopes     String[]
+  lastUsedAt DateTime? @map("last_used_at")
+  expiresAt  DateTime? @map("expires_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("api_keys")
+}
+
+model SystemNotice {
+  id        String    @id @default(cuid())
+  title     String
+  content   String
+  type      String    @default("INFO")
+  isActive  Boolean   @default(true) @map("is_active")
+  startsAt  DateTime? @map("starts_at")
+  endsAt    DateTime? @map("ends_at")
+  createdBy String    @map("created_by")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([isActive])
+  @@map("system_notices")
 }

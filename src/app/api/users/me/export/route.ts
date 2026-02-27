@@ -1,6 +1,7 @@
 // src/app/api/users/me/export/route.ts
-// GET /api/users/me/export?format=json
-// 사용자 본인의 모든 데이터를 JSON으로 내보냅니다 (GDPR 대응)
+// ✅ 수정: export const dynamic = 'force-dynamic' 추가
+
+export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
@@ -16,7 +17,6 @@ export async function GET(request: NextRequest) {
 
     const userId = session.user.id;
 
-    // 모든 데이터 병렬 조회
     const [user, files, folders, posts, comments, notifications, activityLogs] =
       await Promise.all([
         prisma.user.findUnique({
@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
           select: { id: true, action: true, target: true, createdAt: true },
           orderBy: { createdAt: "desc" },
           take: 500,
-        }).catch(() => []), // ActivityLog 테이블 없으면 빈 배열
+        }).catch(() => []),
       ]);
 
     const exportData = {
@@ -82,12 +82,7 @@ export async function GET(request: NextRequest) {
         notificationCount: notifications.length,
         activityLogCount: activityLogs.length,
       },
-      files,
-      folders,
-      posts,
-      comments,
-      notifications,
-      activityLogs,
+      files, folders, posts, comments, notifications, activityLogs,
     };
 
     const filename = `eum-data-export-${new Date().toISOString().split("T")[0]}.json`;

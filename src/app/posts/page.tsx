@@ -75,7 +75,7 @@ export default function PostsPage() {
       SHARED: { text: "공유", color: "bg-blue-100 text-blue-700" },
       PRIVATE: { text: "비공개", color: "bg-gray-100 text-gray-700" },
     };
-    return badges[visibility] || badges.PRIVATE;
+    return badges[visibility as keyof typeof badges] || badges.PRIVATE;
   };
 
   if (status === "loading") {

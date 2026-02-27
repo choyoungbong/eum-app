@@ -1,9 +1,12 @@
 "use client";
+export const dynamic = 'force-dynamic';
+// src/app/profile/page.tsx
+// ✅ 수정: useSearchParams 제거(미사용), Suspense 불필요하게 됨
 
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import Link from "next/link"
+import Link from "next/link";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -38,7 +41,6 @@ export default function ProfilePage() {
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [sendingVerification, setSendingVerification] = useState(false);
   const [verificationSent, setVerificationSent] = useState(false);
-  const searchParams = useSearchParams();
   const [showDeleteSection, setShowDeleteSection] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -130,9 +132,7 @@ export default function ProfilePage() {
       if (res.ok) {
         toast.success("비밀번호가 변경되었습니다");
         setPwEdit(false);
-        setCurrentPw("");
-        setNewPw("");
-        setConfirmPw("");
+        setCurrentPw(""); setNewPw(""); setConfirmPw("");
       } else {
         toast.error(data.error || "비밀번호 변경에 실패했습니다");
       }
@@ -190,13 +190,12 @@ export default function ProfilePage() {
 
   if (!session || !user) return null;
 
-  // 스토리지 사용률 (5GB 기준, client-utils)
   const usagePercent = stats ? storagePercent(stats.storageUsedBytes) : 0;
   const storageColor =
     usagePercent > 90 ? "bg-red-500" : usagePercent > 70 ? "bg-yellow-500" : "bg-blue-500";
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-slate-900 dark:bg-slate-900">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-900">
       {confirmDialog}
 
       {/* 헤더 */}
@@ -223,7 +222,6 @@ export default function ProfilePage() {
         {/* 프로필 카드 */}
         <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
           <div className="flex items-center gap-4 mb-6">
-            {/* 아바타 */}
             <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-2xl font-bold flex-shrink-0">
               {user.name.charAt(0).toUpperCase()}
             </div>
@@ -240,7 +238,6 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          {/* 통계 바 */}
           {stats && (
             <div className="grid grid-cols-3 gap-4 pt-4 border-t">
               {[
@@ -288,7 +285,6 @@ export default function ProfilePage() {
               </button>
             )}
           </div>
-
           {nameEdit ? (
             <div className="space-y-3">
               <input
@@ -304,10 +300,8 @@ export default function ProfilePage() {
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => { setNameEdit(false); setNewName(user.name); }}
-                  className="px-4 py-1.5 text-sm text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 dark:bg-slate-700 rounded-lg"
-                >
-                  취소
-                </button>
+                  className="px-4 py-1.5 text-sm text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg"
+                >취소</button>
                 <button
                   onClick={handleNameSave}
                   disabled={nameLoading || !newName.trim()}
@@ -327,51 +321,32 @@ export default function ProfilePage() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300">🔒 비밀번호 변경</h3>
             {!pwEdit && (
-              <button
-                onClick={() => setPwEdit(true)}
-                className="text-xs text-blue-600 hover:text-blue-800 font-medium"
-              >
+              <button onClick={() => setPwEdit(true)} className="text-xs text-blue-600 hover:text-blue-800 font-medium">
                 변경
               </button>
             )}
           </div>
-
           {pwEdit ? (
             <div className="space-y-3">
               <div>
                 <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">현재 비밀번호</label>
-                <input
-                  type="password"
-                  value={currentPw}
-                  onChange={(e) => setCurrentPw(e.target.value)}
+                <input type="password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
-                  placeholder="현재 비밀번호"
-                  autoFocus
-                />
+                  placeholder="현재 비밀번호" autoFocus />
               </div>
               <div>
                 <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">새 비밀번호</label>
-                <input
-                  type="password"
-                  value={newPw}
-                  onChange={(e) => setNewPw(e.target.value)}
+                <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
-                  placeholder="새 비밀번호 (최소 8자)"
-                />
+                  placeholder="새 비밀번호 (최소 8자)" />
               </div>
               <div>
                 <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">새 비밀번호 확인</label>
-                <input
-                  type="password"
-                  value={confirmPw}
-                  onChange={(e) => setConfirmPw(e.target.value)}
+                <input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
                   className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm ${
-                    confirmPw && newPw !== confirmPw
-                      ? "border-red-400"
-                      : "border-gray-300"
+                    confirmPw && newPw !== confirmPw ? "border-red-400" : "border-gray-300"
                   }`}
-                  placeholder="새 비밀번호 재입력"
-                />
+                  placeholder="새 비밀번호 재입력" />
                 {confirmPw && newPw !== confirmPw && (
                   <p className="text-xs text-red-500 mt-1">비밀번호가 일치하지 않습니다</p>
                 )}
@@ -379,15 +354,10 @@ export default function ProfilePage() {
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => { setPwEdit(false); setCurrentPw(""); setNewPw(""); setConfirmPw(""); }}
-                  className="px-4 py-1.5 text-sm text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 dark:bg-slate-700 rounded-lg"
-                >
-                  취소
-                </button>
-                <button
-                  onClick={handlePasswordSave}
-                  disabled={pwLoading}
-                  className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                >
+                  className="px-4 py-1.5 text-sm text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg"
+                >취소</button>
+                <button onClick={handlePasswordSave} disabled={pwLoading}
+                  className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
                   {pwLoading ? "변경 중..." : "변경하기"}
                 </button>
               </div>
@@ -401,45 +371,37 @@ export default function ProfilePage() {
         <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
           <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-4">📋 계정 정보</h3>
           <dl className="space-y-3 text-sm">
-            {[
-              { label: "이메일", value: user.email },
-              {
-                label: "이메일 인증",
-                value: user.emailVerified
-                  ? "✅ 인증 완료"
-                  : "⚠️ 미인증",
-                extra: !user.emailVerified && (
-                  <button
-                    onClick={sendVerificationEmail}
-                    disabled={sendingVerification || verificationSent}
-                    className="mt-1 text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
-                  >
-                    {verificationSent
-                      ? "발송됨 ✓"
-                      : sendingVerification
-                      ? "발송 중..."
-                      : "인증 이메일 재발송"}
-                  </button>
-                ),
-              },
-              {
-                label: "가입일",
-                value: new Date(user.createdAt).toLocaleDateString("ko-KR", {
-                  year: "numeric",
-                  month: "long",
-                  day: "numeric",
-                }),
-              },
-            ].map(({ label, value }) => (
-              <div key={label} className="flex justify-between">
-                <dt className="text-gray-500 dark:text-slate-400">{label}</dt>
-                <dd className="font-medium text-gray-900 dark:text-slate-100">{value}</dd>
+            <div className="flex justify-between">
+              <dt className="text-gray-500 dark:text-slate-400">이메일</dt>
+              <dd className="font-medium text-gray-900 dark:text-slate-100">{user.email}</dd>
+            </div>
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between">
+                <dt className="text-gray-500 dark:text-slate-400">이메일 인증</dt>
+                <dd className="font-medium text-gray-900 dark:text-slate-100">
+                  {user.emailVerified ? "✅ 인증 완료" : "⚠️ 미인증"}
+                </dd>
               </div>
-            ))}
+              {!user.emailVerified && (
+                <button
+                  onClick={sendVerificationEmail}
+                  disabled={sendingVerification || verificationSent}
+                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50 text-right"
+                >
+                  {verificationSent ? "발송됨 ✓" : sendingVerification ? "발송 중..." : "인증 이메일 재발송"}
+                </button>
+              )}
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-gray-500 dark:text-slate-400">가입일</dt>
+              <dd className="font-medium text-gray-900 dark:text-slate-100">
+                {new Date(user.createdAt).toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" })}
+              </dd>
+            </div>
           </dl>
         </div>
 
-        {/* 빠른 이동 */}
+        {/* 바로가기 */}
         <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
           <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-3">🔗 바로가기</h3>
           <div className="grid grid-cols-2 gap-2">
@@ -448,20 +410,17 @@ export default function ProfilePage() {
               { href: "/posts", label: "📝 게시글", color: "bg-green-50 text-green-700 hover:bg-green-100" },
               { href: "/chat", label: "💬 채팅", color: "bg-purple-50 text-purple-700 hover:bg-purple-100" },
               { href: "/search", label: "🔍 검색", color: "bg-orange-50 text-orange-700 hover:bg-orange-100" },
-              { href: "/notifications", label: "🔔 알림", color: "bg-gray-50 dark:bg-slate-900 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 dark:bg-slate-700" },
-              { href: "/settings/sessions", label: "💻 로그인 기기", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-600" },
-              { href: "/trash", label: "🗑️ 휴지통", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-600" },
-              { href: "/users/search", label: "👥 사용자 검색", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-600" },
-              { href: "/settings/2fa", label: "🔐 2단계 인증", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-600" },
+              { href: "/notifications", label: "🔔 알림", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
+              { href: "/settings/sessions", label: "💻 로그인 기기", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
+              { href: "/trash", label: "🗑️ 휴지통", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
+              { href: "/users/search", label: "👥 사용자 검색", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
+              { href: "/settings/2fa", label: "🔐 2단계 인증", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
               ...(user.role === "ADMIN"
                 ? [{ href: "/admin", label: "🛡️ 관리자", color: "bg-red-50 text-red-700 hover:bg-red-100" }]
                 : []),
             ].map(({ href, label, color }) => (
-              <Link
-                key={href}
-                href={href}
-                className={`flex items-center justify-center py-3 px-4 rounded-lg text-sm font-medium transition ${color}`}
-              >
+              <Link key={href} href={href}
+                className={`flex items-center justify-center py-3 px-4 rounded-lg text-sm font-medium transition ${color}`}>
                 {label}
               </Link>
             ))}
@@ -474,21 +433,16 @@ export default function ProfilePage() {
           <p className="text-xs text-gray-500 dark:text-slate-400 mb-3">
             파일 목록, 게시글, 댓글, 활동 내역 등 내 모든 데이터를 JSON 파일로 내려받을 수 있습니다.
           </p>
-          <a
-            href="/api/users/me/export"
-            download
-            className="flex items-center justify-center gap-2 w-full py-2.5 text-sm font-medium text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded-xl border border-blue-200 dark:border-blue-800 transition"
-          >
+          <a href="/api/users/me/export" download
+            className="flex items-center justify-center gap-2 w-full py-2.5 text-sm font-medium text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded-xl border border-blue-200 dark:border-blue-800 transition">
             ⬇️ 데이터 내보내기 (JSON)
           </a>
         </div>
 
-        {/* 로그아웃 버튼 */}
+        {/* 로그아웃 */}
         <div>
-          <button
-            onClick={handleLogout}
-            className="w-full py-3 text-sm font-medium text-red-600 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-xl border border-red-200 dark:border-red-800 transition"
-          >
+          <button onClick={handleLogout}
+            className="w-full py-3 text-sm font-medium text-red-600 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-xl border border-red-200 dark:border-red-800 transition">
             로그아웃
           </button>
         </div>
@@ -497,11 +451,9 @@ export default function ProfilePage() {
         <div className="pb-8">
           <button
             onClick={() => setShowDeleteSection(!showDeleteSection)}
-            className="w-full py-2 text-xs text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition"
-          >
+            className="w-full py-2 text-xs text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition">
             {showDeleteSection ? "▲ 접기" : "계정 삭제..."}
           </button>
-
           {showDeleteSection && (
             <div className="mt-3 p-4 rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 space-y-3">
               <p className="text-sm font-semibold text-red-700 dark:text-red-400">⚠️ 계정 영구 삭제</p>
@@ -509,7 +461,7 @@ export default function ProfilePage() {
                 계정을 삭제하면 모든 파일, 게시글, 댓글, 채팅 내역이 <strong>영구적으로 삭제</strong>되며 복구할 수 없습니다.
               </p>
               <p className="text-xs text-gray-600 dark:text-slate-400">
-                확인을 위해 아래에 <strong className="text-red-600">"계정삭제"</strong> 를 입력하세요.
+                확인을 위해 아래에 <strong className="text-red-600">&quot;계정삭제&quot;</strong> 를 입력하세요.
               </p>
               <input
                 type="text"
@@ -521,8 +473,7 @@ export default function ProfilePage() {
               <button
                 onClick={handleDeleteAccount}
                 disabled={deleteConfirmText !== "계정삭제" || isDeleting}
-                className="w-full py-2.5 text-sm font-bold text-white bg-red-500 hover:bg-red-600 disabled:bg-gray-300 dark:disabled:bg-slate-600 disabled:cursor-not-allowed rounded-lg transition"
-              >
+                className="w-full py-2.5 text-sm font-bold text-white bg-red-500 hover:bg-red-600 disabled:bg-gray-300 dark:disabled:bg-slate-600 disabled:cursor-not-allowed rounded-lg transition">
                 {isDeleting ? "삭제 중..." : "계정 영구 삭제"}
               </button>
             </div>

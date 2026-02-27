@@ -1,27 +1,46 @@
 "use client";
+// src/app/providers.tsx — 최종 통합본 (소켓 포함)
 
 import { SessionProvider } from "next-auth/react";
 import { ThemeProvider } from "next-themes";
+import { ToastProvider } from "@/components/Toast";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
-import { ReactNode } from "react";
+import OnboardingTour from "@/components/OnboardingTour";
+import MobileBottomNav from "@/components/MobileBottomNav";
+import SystemNoticeBanner from "@/components/SystemNoticeBanner";
+import UploadProgressOverlay from "@/components/UploadProgressOverlay";
+import { useSocketConnection, useSocketNotifications } from "@/lib/socket-client";
+import { useCallback } from "react";
+import { useToast } from "@/components/Toast";
+import { sound } from "@/lib/sound";
 
-export function Providers({ children }: { children: ReactNode }) {
+// 소켓 알림 브릿지 (내부 컴포넌트)
+function SocketBridge() {
+  const connected = useSocketConnection();
+  const { addToast } = useToast();
+
+  const onNotification = useCallback((n: { type: string; message: string }) => {
+    sound.notification();
+    addToast("info", n.message);
+  }, [addToast]);
+
+  useSocketNotifications(onNotification);
+  return null;
+}
+
+export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <SessionProvider>
-      {/* 
-        attribute="class" → html 태그에 'dark' 클래스 토글
-        defaultTheme="system" → OS 설정 자동 감지
-        enableSystem → 시스템 다크모드 지원
-        storageKey="eum-theme" → localStorage 키
-      */}
-      <ThemeProvider
-        attribute="class"
-        defaultTheme="system"
-        enableSystem
-        storageKey="eum-theme"
-      >
-        {children}
-        <KeyboardShortcuts />
+      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <ToastProvider>
+          <SocketBridge />
+          <SystemNoticeBanner />
+          {children}
+          <UploadProgressOverlay />
+          <MobileBottomNav />
+          <OnboardingTour />
+          <KeyboardShortcuts />
+        </ToastProvider>
       </ThemeProvider>
     </SessionProvider>
   );

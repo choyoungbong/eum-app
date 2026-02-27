@@ -1,0 +1,153 @@
+# .github/workflows/ci.yml
+# PR / push 시 자동 실행: 타입 체크 → 린트 → 단위 테스트 → 빌드 검증
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group:  ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true   # 같은 브랜치 중복 실행 취소
+
+jobs:
+  # ── 코드 품질 검사 ────────────────────────────────────────
+  quality:
+    name: 타입 체크 & 린트
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 의존성 설치
+        run: npm ci
+
+      - name: TypeScript 타입 체크
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        run: npm run lint
+
+  # ── 단위 테스트 ──────────────────────────────────────────
+  unit-test:
+    name: 단위 테스트
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 의존성 설치
+        run: npm ci
+
+      - name: Jest 단위 테스트
+        run: npm run test:ci
+        env:
+          CI: true
+
+      - name: 커버리지 업로드
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
+
+  # ── 빌드 검증 ────────────────────────────────────────────
+  build:
+    name: Next.js 빌드 검증
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 의존성 설치
+        run: npm ci
+
+      - name: Prisma 클라이언트 생성
+        run: npx prisma generate
+
+      - name: Next.js 빌드
+        run: npm run build
+        env:
+          NEXTAUTH_SECRET:  ${{ secrets.NEXTAUTH_SECRET }}
+          NEXTAUTH_URL:     http://localhost:3000
+          DATABASE_URL:     postgresql://test:test@localhost:5432/test
+          SKIP_ENV_VALIDATION: true
+
+      - name: 빌드 결과물 캐시
+        uses: actions/cache@v4
+        with:
+          path: .next
+          key: nextjs-${{ github.sha }}
+
+  # ── E2E 테스트 ───────────────────────────────────────────
+  e2e:
+    name: E2E 테스트
+    runs-on: ubuntu-latest
+    needs: build
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER:     eum_test
+          POSTGRES_PASSWORD: eum_test
+          POSTGRES_DB:       eum_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 의존성 설치
+        run: npm ci
+
+      - name: Playwright 브라우저 설치
+        run: npx playwright install --with-deps chromium
+
+      - name: DB 마이그레이션
+        run: npx prisma db push
+        env:
+          DATABASE_URL: postgresql://eum_test:eum_test@localhost:5432/eum_test
+
+      - name: E2E 테스트
+        run: npm run e2e -- --project=chromium
+        env:
+          DATABASE_URL:    postgresql://eum_test:eum_test@localhost:5432/eum_test
+          NEXTAUTH_SECRET: test-secret-for-ci-only
+          NEXTAUTH_URL:    http://localhost:3000
+          STORAGE_PATH:    /tmp/eum-storage
+
+      - name: 실패 시 리포트 업로드
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

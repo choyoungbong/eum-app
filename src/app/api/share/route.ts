@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
           { status: 404 }
         );
       }
-      if (post.authorId !== session.user.id) {
+      if (post.userId !== session.user.id) {
         return NextResponse.json(
           { error: "게시글 작성자만 공유할 수 있습니다" },
           { status: 403 }

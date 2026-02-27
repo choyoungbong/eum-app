@@ -1,47 +1,62 @@
-﻿/** @type {import('next').NextConfig} */
-const path = require('path');
+﻿// next.config.js (또는 next.config.mjs)
+// Docker standalone 빌드 + 보안 헤더 설정
 
+/** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'standalone',
+  // Docker 멀티스테이지 빌드용 — 최소 파일만 포함
+  output: "standalone",
 
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-
-  experimental: {
-    serverActions: {
-      bodySizeLimit: '50mb',
-    },
-  },
-
-  webpack: (config) => {
-    config.resolve.alias = {
-      ...config.resolve.alias,
-      [path.resolve(__dirname, 'src/app/api/auth/[...nextauth]/route')]:
-        path.resolve(__dirname, 'src/lib/auth'),
-    };
-    return config;
-  },
-
+  // 이미지 최적화 도메인
   images: {
     remotePatterns: [
-      {
-        protocol: 'http',
-        hostname: 'localhost',
-      },
-      {
-        protocol: 'https',
-        hostname: '**.up.railway.app',
-      },
-      {
-        protocol: 'https',
-        hostname: '**.mooo.com',
-      },
+      { protocol: "https", hostname: "**" },
     ],
+    formats: ["image/avif", "image/webp"],
   },
 
-  swcMinify: true,
-  compress: true,
-}
+  // 실험적 기능
+  experimental: {
+    serverComponentsExternalPackages: ["sharp", "winston", "socket.io"],
+  },
 
-module.exports = nextConfig
+  // ── 보안 헤더 (Nginx가 없는 환경 대비) ──────────────────
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options",        value: "SAMEORIGIN" },
+          { key: "X-Content-Type-Options",  value: "nosniff" },
+          { key: "Referrer-Policy",         value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy",      value: "camera=(), microphone=(), geolocation=()" },
+        ],
+      },
+      // 정적 파일 장기 캐시
+      {
+        source: "/_next/static/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
+    ];
+  },
+
+  // ── 리디렉션 ─────────────────────────────────────────────
+  async redirects() {
+    return [
+      {
+        source:      "/home",
+        destination: "/dashboard",
+        permanent:   true,
+      },
+    ];
+  },
+
+  // BigInt JSON 직렬화 경고 억제
+  webpack(config) {
+    config.resolve.fallback = { fs: false, path: false };
+    return config;
+  },
+};
+
+module.exports = nextConfig;

@@ -1,7 +1,8 @@
 "use client";
 // src/app/users/search/page.tsx
+// ✅ 수정: useSearchParams를 Suspense로 감싸는 패턴 적용
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, Search, Users, UserPlus, UserCheck } from "lucide-react";
@@ -18,7 +19,8 @@ interface SearchUser {
   _count: { files: number; posts: number };
 }
 
-export default function UserSearchPage() {
+// ✅ useSearchParams를 사용하는 부분을 별도 컴포넌트로 분리
+function UserSearchContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [query, setQuery] = useState(searchParams.get("q") ?? "");
@@ -36,7 +38,6 @@ export default function UserSearchPage() {
       const data = await res.json();
       setUsers(data.users ?? []);
       setTotal(data.total ?? 0);
-      // 초기 팔로우 상태 세팅
       const init = new Set<string>(data.users.filter((u: SearchUser) => u.isFollowing).map((u: SearchUser) => u.id));
       setFollowing(init);
     } catch {
@@ -69,7 +70,7 @@ export default function UserSearchPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-slate-900">
+    <>
       {/* 헤더 */}
       <div className="bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
@@ -91,14 +92,12 @@ export default function UserSearchPage() {
       </div>
 
       <div className="max-w-2xl mx-auto px-4 py-4">
-        {/* 결과 수 */}
         {query && !loading && (
           <p className="text-xs text-gray-500 dark:text-slate-400 mb-3 px-1">
             {total > 0 ? `"${query}" 검색 결과 ${total}명` : `"${query}"에 해당하는 사용자가 없습니다`}
           </p>
         )}
 
-        {/* 로딩 */}
         {loading && (
           <div className="space-y-2">
             {[...Array(4)].map((_, i) => (
@@ -113,7 +112,6 @@ export default function UserSearchPage() {
           </div>
         )}
 
-        {/* 빈 상태 (검색 전) */}
         {!query && !loading && (
           <div className="flex flex-col items-center justify-center py-24 text-center">
             <div className="w-16 h-16 rounded-full bg-gray-100 dark:bg-slate-800 flex items-center justify-center mb-4">
@@ -124,13 +122,11 @@ export default function UserSearchPage() {
           </div>
         )}
 
-        {/* 결과 목록 */}
         {!loading && users.length > 0 && (
           <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-100 dark:border-slate-700 overflow-hidden">
             <div className="divide-y divide-gray-100 dark:divide-slate-700">
               {users.map((u) => (
                 <div key={u.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-slate-700/50 transition-colors">
-                  {/* 아바타 */}
                   <Link href={`/users/${u.id}`} className="relative shrink-0">
                     <div className="w-11 h-11 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-bold">
                       {u.name[0]}
@@ -139,8 +135,6 @@ export default function UserSearchPage() {
                       <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-slate-800" />
                     )}
                   </Link>
-
-                  {/* 정보 */}
                   <Link href={`/users/${u.id}`} className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <p className="text-sm font-semibold text-gray-900 dark:text-slate-100 truncate">{u.name}</p>
@@ -153,8 +147,6 @@ export default function UserSearchPage() {
                       파일 {u._count.files} · 게시글 {u._count.posts}
                     </p>
                   </Link>
-
-                  {/* 팔로우 버튼 */}
                   <button
                     onClick={() => toggleFollow(u.id)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition shrink-0 ${
@@ -171,6 +163,21 @@ export default function UserSearchPage() {
           </div>
         )}
       </div>
+    </>
+  );
+}
+
+// ✅ 페이지 진입점 — Suspense로 감싸서 useSearchParams 허용
+export default function UserSearchPage() {
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-900">
+      <Suspense fallback={
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        </div>
+      }>
+        <UserSearchContent />
+      </Suspense>
     </div>
   );
 }

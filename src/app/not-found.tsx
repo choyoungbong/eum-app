@@ -58,3 +58,25 @@ export default function NotFound() {
     </div>
   );
 }
+
+// export default function NotFoundPage() {
+//   return (
+//     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-slate-900 px-4">
+//       <div className="text-center space-y-6 max-w-sm">
+//         <p className="text-7xl font-black text-gray-200 dark:text-slate-700">404</p>
+//         <div>
+//           <h1 className="text-xl font-bold text-gray-900 dark:text-slate-100 mb-2">
+//             페이지를 찾을 수 없습니다
+//           </h1>
+//           <p className="text-sm text-gray-500 dark:text-slate-400">
+//             주소가 잘못되었거나 삭제된 페이지입니다.
+//           </p>
+//         </div>
+//         <a href="/dashboard"
+//           className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition">
+//           <Home size={15} /> 대시보드로
+//         </a>
+//       </div>
+//     </div>
+//   );
+// }

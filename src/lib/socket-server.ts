@@ -1,5 +1,7 @@
 // src/lib/socket-server.ts
-// Socket.IO 서버 이벤트 핸들러 전체 (알림 / 타이핑 / 프레즌스 / 업로드 진행률)
+// Socket.IO 서버 이벤트 핸들러 전체
+// ✅ 수정: call:start/accept/reject/end/ice-candidate 시그널링 핸들러 추가
+// ✅ 수정: typing 이벤트명 클라이언트와 일치하도록 수정
 
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { prisma } from "@/lib/db";
@@ -76,7 +78,7 @@ export function initSocketServer(io: SocketIOServer) {
       data: { isOnline: true, lastSeenAt: new Date() },
     }).catch(() => {});
 
-    // 친구/팔로워에게 온라인 알림
+    // 팔로워에게 온라인 알림
     const followers = await prisma.follow.findMany({
       where: { followingId: userId },
       select: { followerId: true },
@@ -87,32 +89,35 @@ export function initSocketServer(io: SocketIOServer) {
 
     console.log(`🔌 ${userId} connected (${socket.id})`);
 
-    // ── 채팅방 참가 ──────────────────────────────────────
+    // ── 채팅방 참가/나가기 ────────────────────────────────
     socket.on("chat:join", (roomId: string) => {
-      socket.join(`room:${roomId}`);
+      socket.join(`chat:${roomId}`);
     });
     socket.on("chat:leave", (roomId: string) => {
-      socket.leave(`room:${roomId}`);
+      socket.leave(`chat:${roomId}`);
     });
 
-    // ── 타이핑 인디케이터 ────────────────────────────────
-    socket.on("chat:typing:start", ({ roomId }: { roomId: string }) => {
-      socket.to(`room:${roomId}`).emit("chat:typing:update", {
-        userId, roomId, isTyping: true,
+    // ── 타이핑 인디케이터 ─────────────────────────────────
+    // ✅ 클라이언트가 "typing:start" / "typing:stop" 이벤트로 emit
+    socket.on("typing:start", ({ chatRoomId }: { chatRoomId: string }) => {
+      socket.to(`chat:${chatRoomId}`).emit("typing:update", {
+        userId,
+        chatRoomId,
+        isTyping: true,
       });
     });
-    socket.on("chat:typing:stop", ({ roomId }: { roomId: string }) => {
-      socket.to(`room:${roomId}`).emit("chat:typing:update", {
-        userId, roomId, isTyping: false,
+    socket.on("typing:stop", ({ chatRoomId }: { chatRoomId: string }) => {
+      socket.to(`chat:${chatRoomId}`).emit("typing:update", {
+        userId,
+        chatRoomId,
+        isTyping: false,
       });
     });
 
-    // ── 업로드 진행률 브로드캐스트 ──────────────────────
-    // 클라이언트가 XHR progress 이벤트를 받아 소켓으로 전달
+    // ── 업로드 진행률 브로드캐스트 ───────────────────────
     socket.on("upload:progress", ({ fileId, progress, filename }: {
       fileId: string; progress: number; filename: string;
     }) => {
-      // 본인의 다른 기기에게도 브로드캐스트
       socket.to(`user:${userId}`).emit("upload:progress:update", { fileId, progress, filename });
     });
     socket.on("upload:done", ({ fileId, filename }: { fileId: string; filename: string }) => {
@@ -123,6 +128,167 @@ export function initSocketServer(io: SocketIOServer) {
         createdAt: new Date().toISOString(),
       });
     });
+
+    // ════════════════════════════════════════════════════════
+    // ── WebRTC 통화 시그널링 ──────────────────────────────
+    // ✅ 핵심 추가: 이 핸들러들이 없어서 통화가 안 됐음
+    // ════════════════════════════════════════════════════════
+
+    // 1. 통화 걸기 (발신자 → 서버 → 수신자)
+    socket.on("call:start", async ({
+      receiverId,
+      chatRoomId,
+      callType,
+      offer,
+    }: {
+      receiverId: string;
+      chatRoomId: string;
+      callType: "VOICE" | "VIDEO";
+      offer: RTCSessionDescriptionInit;
+    }) => {
+      console.log(`📞 통화 요청: ${userId} → ${receiverId} (${callType})`);
+
+      // 수신자가 온라인인지 확인
+      if (!isUserOnline(receiverId)) {
+        socket.emit("call:user-offline", { receiverId });
+        return;
+      }
+
+      // DB에 통화 기록 생성
+      try {
+        const call = await prisma.call.create({
+          data: {
+            chatRoomId,
+            //callerId: userId,
+            initiatorId: userId,
+            receiverId,
+            type: callType,
+            status: "PENDING",
+          },
+        });
+
+        // 수신자에게 전달
+        emitToUser(receiverId, "call:incoming", {
+          callId: call.id,
+          callerId: userId,
+          chatRoomId,
+          callType,
+          offer,
+        });
+      } catch (e) {
+        console.error("통화 생성 오류:", e);
+        socket.emit("call:error", { message: "통화를 시작할 수 없습니다" });
+      }
+    });
+
+    // 2. 통화 수락 (수신자 → 서버 → 발신자)
+    socket.on("call:accept", async ({
+      callerId,
+      answer,
+    }: {
+      callerId: string;
+      answer: RTCSessionDescriptionInit;
+    }) => {
+      console.log(`✅ 통화 수락: ${userId} → ${callerId}`);
+
+      // DB 상태 업데이트
+      await prisma.call.updateMany({
+        where: {
+          initiatorId: callerId,
+          receiverId: userId,
+          status: "PENDING",
+        },
+        data: {
+          status: "ACCEPTED",
+          startedAt: new Date(),
+        },
+      }).catch(() => {});
+
+      // 발신자에게 answer 전달
+      emitToUser(callerId, "call:accepted", { answer });
+    });
+
+    // 3. 통화 거절 (수신자 → 서버 → 발신자)
+    socket.on("call:reject", async ({ callerId }: { callerId: string }) => {
+      console.log(`❌ 통화 거절: ${userId} → ${callerId}`);
+
+      await prisma.call.updateMany({
+        where: {
+          initiatorId: callerId,
+          receiverId: userId,
+          status: "PENDING",
+        },
+        data: {
+          status: "REJECTED",
+          endedAt: new Date(),
+        },
+      }).catch(() => {});
+
+      emitToUser(callerId, "call:rejected", {});
+    });
+
+    // 4. 통화 종료 (양방향)
+    socket.on("call:end", async ({ otherUserId }: { otherUserId: string }) => {
+      console.log(`📴 통화 종료: ${userId} → ${otherUserId}`);
+
+      const endedAt = new Date();
+
+      // 진행 중인 통화 종료 처리
+      const call = await prisma.call.findFirst({
+        where: {
+          status: { in: ["PENDING", "ACCEPTED", "ACTIVE"] },
+          OR: [
+            { initiatorId: userId, receiverId: otherUserId },
+            { initiatorId: otherUserId, receiverId: userId },
+          ],
+        },
+      }).catch(() => null);
+
+      if (call) {
+        const duration = call.startedAt
+          ? Math.floor((endedAt.getTime() - call.startedAt.getTime()) / 1000)
+          : 0;
+
+        await prisma.call.update({
+          where: { id: call.id },
+          data: { status: "ENDED", endedAt, duration },
+        }).catch(() => {});
+
+        // 통화 로그 메시지 생성
+        const minutes = Math.floor(duration / 60);
+        const seconds = duration % 60;
+        const logMsg = duration > 0
+          ? `통화가 종료되었습니다. (${minutes}분 ${seconds}초)`
+          : "통화가 종료되었습니다.";
+
+        await prisma.chatMessage.create({
+          data: {
+            chatRoomId: call.chatRoomId,
+            senderId: userId,
+            type: "CALL_LOG",
+            callId: call.id,
+            content: logMsg,
+          },
+        }).catch(() => {});
+      }
+
+      // 상대방에게 종료 알림
+      emitToUser(otherUserId, "call:ended", {});
+    });
+
+    // 5. ICE Candidate 교환 (양방향)
+    socket.on("call:ice-candidate", ({
+      otherUserId,
+      candidate,
+    }: {
+      otherUserId: string;
+      candidate: RTCIceCandidateInit;
+    }) => {
+      // 상대방에게 ICE candidate 전달
+      emitToUser(otherUserId, "call:ice-candidate", { candidate });
+    });
+
+    // ════════════════════════════════════════════════════════
 
     // ── 연결 해제 ────────────────────────────────────────
     socket.on("disconnect", async () => {

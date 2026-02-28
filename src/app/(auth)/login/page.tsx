@@ -1,179 +1,109 @@
 "use client";
 
-import { useState, Suspense } from "react";
-import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import React, { useState, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { 
-  Mail, 
-  Lock, 
-  Eye, 
-  EyeOff, 
-  Cloud, 
-  AlertCircle, 
-  Loader2,
-  ChevronRight,
-  Search
-} from "lucide-react";
+import { Loader2 } from "lucide-react"; // 로딩 아이콘용
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
-  const isSignupSuccess = searchParams.get("signup") === "success";
+  // searchParams가 null일 경우를 대비한 안전한 접근
+  const isSignupSuccess = searchParams?.get("signup") === "success";
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setLoading(true);
+    setIsLoading(true);
 
     try {
-      const result = await signIn("credentials", {
-        email,
-        password,
-        redirect: false,
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+        headers: { "Content-Type": "application/json" },
       });
 
-      if (result?.error) {
-        setError("이메일 또는 비밀번호가 올바르지 않습니다.");
-      } else {
+      if (res.ok) {
         router.push("/dashboard");
         router.refresh();
+      } else {
+        const data = await res.json();
+        setError(data.message || "로그인에 실패했습니다.");
       }
     } catch (err) {
-      setError("로그인 중 서버 오류가 발생했습니다.");
+      setError("서버 연결에 실패했습니다.");
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#0f0c29] text-white flex items-center justify-center p-6 relative overflow-hidden">
-      {/* 배경 장식 */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-600/20 blur-[100px] rounded-full -z-10" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/20 blur-[100px] rounded-full -z-10" />
-
-      <div className="max-w-md w-full">
-        {/* 로고 */}
-        <div className="text-center mb-10 flex flex-col items-center">
-          <Link href="/" className="inline-flex items-center gap-3 mb-4 group">
-            <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-blue-600 rounded-2xl flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform">
-              <Cloud size={28} fill="currentColor" />
-            </div>
-            <div className="text-left">
-              <h1 className="text-3xl font-black tracking-tighter italic leading-none">EUM</h1>
-              <p className="text-[10px] text-white/40 uppercase tracking-[0.2em] font-bold mt-1">Personal Cloud</p>
-            </div>
-          </Link>
+    <div className="w-full max-w-md mx-auto bg-white dark:bg-zinc-900 border dark:border-zinc-800 rounded-xl shadow-sm overflow-hidden">
+      <div className="p-6">
+        <div className="space-y-1 mb-6">
+          <h2 className="text-2xl font-bold tracking-tight dark:text-white">로그인</h2>
+          <p className="text-sm text-gray-500 dark:text-zinc-400">계정에 접속하여 서비스를 이용하세요.</p>
         </div>
 
-        {/* 카드 */}
-        <div className="bg-white/5 border border-white/10 p-8 rounded-[40px] backdrop-blur-2xl shadow-2xl relative">
-          <div className="mb-8">
-            <h2 className="text-2xl font-bold mb-2">로그인</h2>
-            <p className="text-white/50 text-sm">이음에 오신 것을 환영합니다 👋</p>
-          </div>
-
-          {isSignupSuccess && !error && (
-            <div className="mb-6 flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 p-4 rounded-2xl text-sm animate-fade-in">
-              <AlertCircle size={18} />
-              <p>회원가입 완료! 생성한 계정으로 로그인하세요.</p>
+        <form onSubmit={handleLogin} className="space-y-4">
+          {isSignupSuccess && (
+            <div className="p-3 rounded-lg bg-green-50 border border-green-200 dark:bg-green-900/20 dark:border-green-900">
+              <p className="text-sm text-green-600 dark:text-green-400">
+                회원가입이 완료되었습니다. 로그인해 주세요.
+              </p>
             </div>
           )}
-
+          
           {error && (
-            <div className="mb-6 flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-2xl text-sm">
-              <AlertCircle size={18} />
-              <p>{error}</p>
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 dark:bg-red-900/20 dark:border-red-900">
+              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
             </div>
           )}
 
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-white/40 ml-1 uppercase tracking-wider">Email</label>
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-white/20 group-focus-within:text-purple-400 transition-colors">
-                  <Mail size={18} />
-                </div>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="example@email.com"
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500/50 focus:bg-white/10 transition-all placeholder:text-white/10"
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-white/40 ml-1 uppercase tracking-wider">Password</label>
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-white/20 group-focus-within:text-purple-400 transition-colors">
-                  <Lock size={18} />
-                </div>
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="비밀번호를 입력하세요"
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-12 pr-12 outline-none focus:border-purple-500/50 focus:bg-white/10 transition-all placeholder:text-white/10"
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-4 flex items-center text-white/20 hover:text-white transition-colors"
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 px-1">
-              <Link href="/find-email" className="text-xs text-white/30 hover:text-purple-400 transition-colors flex items-center gap-1">
-                <Search size={12} />
-                이메일 찾기
-              </Link>
-              <span className="text-white/10 text-xs">|</span>
-              <Link href="/reset-password" className="text-xs text-white/30 hover:text-purple-400 transition-colors">
-                비밀번호 재설정
-              </Link>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-4 bg-gradient-to-r from-purple-500 to-blue-600 text-white font-bold rounded-2xl hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-xl shadow-purple-500/20 disabled:opacity-50 mt-2"
-            >
-              {loading ? (
-                <Loader2 size={20} className="animate-spin" />
-              ) : (
-                <>
-                  로그인
-                  <ChevronRight size={20} />
-                </>
-              )}
-            </button>
-          </form>
-
-          <div className="mt-8 pt-8 border-t border-white/5 text-center">
-            <p className="text-white/40 text-sm">
-              아직 계정이 없으신가요?{" "}
-              <Link href="/register" className="text-white font-bold hover:text-purple-400 transition-colors underline underline-offset-4">
-                회원가입
-              </Link>
-            </p>
+          <div className="space-y-2">
+            <label className="text-sm font-medium dark:text-zinc-200">이메일</label>
+            <input 
+              type="email" 
+              placeholder="name@example.com" 
+              className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required 
+            />
           </div>
-        </div>
-        
-        <p className="text-center mt-10 text-white/10 text-[10px] font-medium tracking-[0.3em] uppercase">
-          © 2026 EUM Cloud Service
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium dark:text-zinc-200">비밀번호</label>
+            <input 
+              type="password" 
+              className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required 
+            />
+          </div>
+
+          <button 
+            type="submit" 
+            disabled={isLoading}
+            className="w-full flex items-center justify-center py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-md font-medium transition-colors"
+          >
+            {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "로그인"}
+          </button>
+        </form>
+      </div>
+      
+      <div className="px-6 py-4 bg-gray-50 dark:bg-zinc-800/50 border-t dark:border-zinc-800 text-center">
+        <p className="text-sm text-gray-500 dark:text-zinc-400">
+          계정이 없으신가요?{" "}
+          <Link href="/signup" className="text-blue-600 dark:text-blue-400 hover:underline">
+            회원가입
+          </Link>
         </p>
       </div>
     </div>
@@ -182,12 +112,10 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-[#0f0c29] flex items-center justify-center">
-        <Loader2 size={40} className="animate-spin text-purple-500" />
-      </div>
-    }>
-      <LoginForm />
-    </Suspense>
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50 dark:bg-zinc-950">
+      <Suspense fallback={<div className="dark:text-white">로딩 중...</div>}>
+        <LoginForm />
+      </Suspense>
+    </div>
   );
 }

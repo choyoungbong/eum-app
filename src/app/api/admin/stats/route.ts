@@ -34,15 +34,33 @@ export async function GET() {
     prisma.$queryRaw<{ date: string; count: bigint }[]>`SELECT DATE("created_at") AS date, COUNT(*) AS count FROM files WHERE "created_at" >= NOW() - INTERVAL '14 days' AND "deleted_at" IS NULL GROUP BY DATE("created_at") ORDER BY date`,
   ]);
 
-  const userIds = storageByUser.map((x) => x.userId);
+  const userIds = storageByUser.map((x: any) => x.userId);
   const users = await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } });
-  const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
+  const userMap = Object.fromEntries(users.map((u: any) => [u.id, u]));
 
   return NextResponse.json({
-    summary: { totalUsers, activeUsers, bannedUsers, totalFiles, totalStorage: totalStorage._sum.size?.toString() ?? "0", totalPosts, totalComments, newUsersLast30, newFilesLast30 },
-    topStorageUsers: storageByUser.map((x) => ({ ...userMap[x.userId], storageUsed: x._sum.size?.toString() ?? "0" })),
-    filesByType: filesByType.map((x) => ({ type: x.type, count: Number(x.count), size: x.size.toString() })),
-    dailySignups: dailySignups.map((x) => ({ date: x.date, count: Number(x.count) })),
-    dailyUploads: dailyUploads.map((x) => ({ date: x.date, count: Number(x.count) })),
-  });
+  summary: { 
+    totalUsers, activeUsers, bannedUsers, totalFiles, 
+    totalStorage: totalStorage._sum.size?.toString() ?? "0", 
+    totalPosts, totalComments, newUsersLast30, newFilesLast30 
+  },
+  // (x)를 (x: any)로 수정하여 타입을 명시합니다.
+  topStorageUsers: storageByUser.map((x: any) => ({ 
+    ...userMap[x.userId], 
+    storageUsed: x._sum.size?.toString() ?? "0" 
+  })),
+  filesByType: filesByType.map((x: any) => ({ 
+    type: x.type, 
+    count: Number(x.count), 
+    size: x.size.toString() 
+  })),
+  dailySignups: dailySignups.map((x: any) => ({ 
+    date: x.date, 
+    count: Number(x.count) 
+  })),
+  dailyUploads: dailyUploads.map((x: any) => ({ 
+    date: x.date, 
+    count: Number(x.count) 
+  })),
+});
 }

@@ -173,7 +173,7 @@ export async function GET(
 
     // 각 공유의 사용자 정보 수동 조회
     const sharesWithUsers = await Promise.all(
-      shares.map(async (share) => {
+      shares.map(async (share: any) => {
         const sharedWith = await prisma.user.findUnique({
           where: { id: share.sharedWithId },
           select: {

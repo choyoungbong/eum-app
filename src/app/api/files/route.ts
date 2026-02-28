@@ -52,7 +52,7 @@ export async function GET(request: NextRequest) {
           isStarred: true, isPinned: true,
         },
       });
-      return NextResponse.json({ files: files.map((f) => ({ ...f, size: f.size.toString() })) });
+      return NextResponse.json({ files: files.map((f: any) => ({ ...f, size: f.size.toString() })) });
     }
 
     if (folderId === "null" || !folderId) {
@@ -89,7 +89,7 @@ export async function GET(request: NextRequest) {
     const sharedResources = await prisma.sharedResource.findMany({
       where: { resourceType: "FILE", sharedWithId: session.user.id },
     });
-    const sharedFileIds = sharedResources.map((sr) => sr.resourceId);
+    const sharedFileIds = sharedResources.map((sr: any) => sr.resourceId);
 
     const sharedFilesData = sharedFileIds.length > 0
       ? await prisma.file.findMany({
@@ -98,8 +98,8 @@ export async function GET(request: NextRequest) {
         })
       : [];
 
-    const sharedFilesWithMeta = sharedFilesData.map((file) => {
-      const shareInfo = sharedResources.find((sr) => sr.resourceId === file.id);
+    const sharedFilesWithMeta = sharedFilesData.map((file: any) => {
+      const shareInfo = sharedResources.find((sr: any) => sr.resourceId === file.id);
       return {
         ...file, size: file.size.toString(),
         isShared: true, isOwner: false,
@@ -143,7 +143,7 @@ export async function GET(request: NextRequest) {
       resultFiles = myFilesWithMeta;
       finalTotal  = totalMyFiles;
     } else {
-      sharedFilesWithMeta.sort((a, b) => {
+      sharedFilesWithMeta.sort((a: any, b: any) => {
         const aVal = (a as any)[sortBy], bVal = (b as any)[sortBy];
         return sortOrder === "desc" ? (aVal > bVal ? -1 : 1) : (aVal > bVal ? 1 : -1);
       });

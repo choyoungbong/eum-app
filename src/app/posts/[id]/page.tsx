@@ -1,4 +1,6 @@
 "use client";
+// src/app/posts/[id]/page.tsx
+// ✅ 수정: params?.id — null 안전 처리 (빌드 에러 수정)
 
 import { useSession } from "next-auth/react";
 import { useRouter, useParams } from "next/navigation";
@@ -6,6 +8,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
+import PostShareModal from "@/components/PostShareModal";
 
 interface Comment {
   id: string;
@@ -24,14 +27,12 @@ interface Post {
   comments: Comment[];
 }
 
-// PostShareModal은 기존 컴포넌트 그대로 사용
-import PostShareModal from "@/components/PostShareModal";
-
 export default function PostDetailPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const params = useParams();
-  const postId = params.id as string;
+  // ✅ 핵심 수정: params?.id — null 가능성 제거
+  const postId = typeof params?.id === "string" ? params.id : "";
 
   const [post, setPost] = useState<Post | null>(null);
   const [loading, setLoading] = useState(true);
@@ -47,7 +48,7 @@ export default function PostDetailPage() {
 
   useEffect(() => {
     if (session && postId) fetchPost();
-  }, [session, postId]);
+  }, [session, postId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchPost = async () => {
     try {
@@ -56,7 +57,6 @@ export default function PostDetailPage() {
         const data = await res.json();
         setPost(data.post);
       } else {
-        // ✅ alert() → toast + router.push
         toast.error("게시글을 불러올 수 없습니다");
         router.push("/posts");
       }
@@ -93,7 +93,6 @@ export default function PostDetailPage() {
   };
 
   const handleDeleteComment = (commentId: string) => {
-    // ✅ confirm() → ConfirmDialog
     openConfirm({
       title: "댓글 삭제",
       message: "댓글을 삭제하시겠습니까?",
@@ -115,7 +114,6 @@ export default function PostDetailPage() {
   };
 
   const handleDeletePost = () => {
-    // ✅ confirm() → ConfirmDialog
     openConfirm({
       title: "게시글 삭제",
       message: "게시글을 삭제하면 되돌릴 수 없습니다. 삭제하시겠습니까?",
@@ -139,8 +137,8 @@ export default function PostDetailPage() {
 
   const getVisibilityBadge = (visibility: string) => {
     const badges: Record<string, { text: string; color: string }> = {
-      PUBLIC: { text: "공개", color: "bg-green-100 text-green-700" },
-      SHARED: { text: "공유", color: "bg-blue-100 text-blue-700" },
+      PUBLIC:  { text: "공개",   color: "bg-green-100 text-green-700" },
+      SHARED:  { text: "공유",   color: "bg-blue-100 text-blue-700" },
       PRIVATE: { text: "비공개", color: "bg-gray-100 text-gray-700" },
     };
     return badges[visibility] || badges.PRIVATE;
@@ -210,7 +208,7 @@ export default function PostDetailPage() {
             <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
               <p className="text-sm text-blue-800">
                 🔗 이 게시글은 <strong>특정 사용자에게만 공유</strong>된 상태입니다.
-                {isAuthor && <> "공유 관리" 버튼을 클릭하여 공유 대상을 관리할 수 있습니다.</>}
+                {isAuthor && <> &quot;공유 관리&quot; 버튼을 클릭하여 공유 대상을 관리할 수 있습니다.</>}
               </p>
             </div>
           )}

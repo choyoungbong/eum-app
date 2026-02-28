@@ -1,108 +1,31 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-
-/* ─────────────────────────────────────────
-   라이트 모드 CSS 변수 (기본값)
-───────────────────────────────────────── */
+/* - 모바일 UI/UX 대응 */
 :root {
-  --eum-purple: #7c3aed;
-  --eum-blue: #2563eb;
-  --eum-dark: #0f0c29;
-  --eum-glass: rgba(255, 255, 255, 0.06);
-  --eum-border: rgba(255, 255, 255, 0.12);
-
-  --bg-base:       #f8f9fa;
-  --bg-surface:    #ffffff;
-  --bg-elevated:   #ffffff;
-  --bg-muted:      #f1f5f9;
-  --bg-hover:      #f1f5f9;
-
-  --text-primary:  #0f172a;
-  --text-secondary:#475569;
-  --text-muted:    #94a3b8;
-  --text-inverted: #ffffff;
-
-  --border-base:   #e2e8f0;
-  --border-strong: #cbd5e1;
-
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --sat: env(safe-area-inset-top);
+  --sab: env(safe-area-inset-bottom);
 }
 
-/* ─────────────────────────────────────────
-   다크모드 CSS 변수
-───────────────────────────────────────── */
-.dark {
-  --bg-base:       #0f172a;
-  --bg-surface:    #1e293b;
-  --bg-elevated:   #293548;
-  --bg-muted:      #1e293b;
-  --bg-hover:      #2d3f55;
-
-  --text-primary:  #f1f5f9;
-  --text-secondary:#94a3b8;
-  --text-muted:    #64748b;
-  --text-inverted: #0f172a;
-
-  --border-base:   #334155;
-  --border-strong: #475569;
-
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
-
-  --eum-glass: rgba(255, 255, 255, 0.04);
-  --eum-border: rgba(255, 255, 255, 0.08);
+html, body {
+  /* 키보드 대응을 위한 높이 설정 */
+  height: -webkit-fill-available;
+  overflow: hidden; /* 바디 스크롤 방지, 내부 스크롤 사용 */
 }
 
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+.safe-area-bottom {
+  padding-bottom: var(--sab);
 }
 
-body {
-  font-family: 'Pretendard', -apple-system, sans-serif;
-  background-color: var(--bg-base);
-  color: var(--text-primary);
-  overflow-x: hidden;
-  transition: background-color 0.2s ease, color 0.2s ease;
+/* 메시지 리스트 영역: 입력창 높이를 제외한 가변 높이 */
+.chat-messages-container {
+  height: calc(100vh - 80px - var(--sat) - var(--sab));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
-.eum-landing {
-  background-color: var(--eum-dark);
-  color: #ffffff;
-}
-
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: var(--bg-base); }
-::-webkit-scrollbar-thumb {
-  background: rgba(124, 58, 237, 0.3);
-  border-radius: 10px;
-}
-::-webkit-scrollbar-thumb:hover { background: var(--eum-purple); }
-
-.text-eum-gradient {
-  background: linear-gradient(135deg, #a78bfa, #60a5fa);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.eum-glass-effect {
-  background: var(--eum-glass);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--eum-border);
-}
-
-*, *::before, *::after {
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-}
-button, a, input, textarea, select {
-  transition: background-color 0.15s ease, border-color 0.15s ease,
-              color 0.1s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+/* 모바일 입력창 하단 고정 */
+.chat-input-wrapper {
+  position: sticky;
+  bottom: 0;
+  padding-bottom: max(1rem, var(--sab));
+  background: white;
+  z-index: 50;
 }

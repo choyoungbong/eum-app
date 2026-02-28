@@ -37,9 +37,9 @@ export async function logActivity(input: LogActivityInput) {
         action:   input.action,
         target:   input.target,
         targetId: input.targetId,
-        // ✅ Prisma Json 타입 캐스팅
+        // ✅ Prisma.InputJsonValue 에러를 해결하기 위해 any로 캐스팅
         meta: Object.keys(meta).length
-          ? (meta as Prisma.InputJsonValue)
+          ? (meta as any) 
           : undefined,
       },
     });

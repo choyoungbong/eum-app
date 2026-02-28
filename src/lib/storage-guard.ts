@@ -1,42 +1,49 @@
 // src/lib/storage-guard.ts
-// 파일 업로드 전 용량 제한 확인 유틸리티
-// upload route에서 호출해 사용
-
 import { prisma } from "@/lib/db";
 
-const DEFAULT_LIMIT = BigInt(5 * 1024 * 1024 * 1024); // 5GB
-
-export async function checkStorageQuota(
-  userId: string,
-  newFileSize: number
-): Promise<{ allowed: boolean; used: bigint; limit: bigint; remaining: bigint }> {
+export async function checkStorageLimit(userId: string, newFileSize: number) {
+  // 1. 사용자의 용량 제한 및 현재 사용량 조회
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { storageUsed: true, storageLimit: true },
+    select: { storageLimit: true },
   });
 
-  const used  = user?.storageUsed  ?? BigInt(0);
-  const limit = user?.storageLimit ?? DEFAULT_LIMIT;
+  if (!user) throw new Error("사용자를 찾을 수 없습니다.");
+
+  // 2. 현재 총 사용량 계산 (_sum.size는 BigInt를 반환함)
+  const storageUsed = await prisma.file.aggregate({
+    where: { userId },
+    _sum: { size: true },
+  });
+
+  const used = storageUsed._sum.size || BigInt(0);
+  const limit = user.storageLimit; // DB의 BigInt 타입
   const remaining = limit - used;
 
   return {
+    // 모든 반환 값을 BigInt로 통일하거나, 비교 결과만 반환
     allowed: remaining >= BigInt(newFileSize),
-    used, limit, remaining,
+    used: used,
+    limit: limit,
+    remaining: remaining,
   };
 }
 
-/** 파일 업로드 완료 후 사용량 증가 */
-export async function incrementStorage(userId: string, bytes: number) {
-  await prisma.user.update({
-    where: { id: userId },
-    data: { storageUsed: { increment: BigInt(bytes) } },
-  });
-}
+/**
+ * 용량 단위를 사람이 읽기 편한 문자열로 변환 (BigInt 대응)
+ */
+export function formatBytes(bytes: bigint | number, decimals = 2) {
+  const b = BigInt(bytes);
+  if (b === BigInt(0)) return "0 Bytes";
 
-/** 파일 삭제 후 사용량 감소 */
-export async function decrementStorage(userId: string, bytes: bigint | number) {
-  await prisma.user.update({
-    where: { id: userId },
-    data: { storageUsed: { decrement: BigInt(bytes) } },
-  }).catch(() => {}); // 음수 방지를 위해 에러 무시
+  const k = BigInt(1024);
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB"];
+
+  // BigInt 계산을 위해 숫자로 변환하여 지수 계산
+  const i = Math.floor(Math.log(Number(b)) / Math.log(1024));
+
+  return (
+    parseFloat((Number(b) / Math.pow(1024, i)).toFixed(dm)) + " " + sizes[i]
+  );
 }

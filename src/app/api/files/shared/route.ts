@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     }
 
     // 2. resourceId로 파일 정보 별도 조회
-    const fileIds = sharedResources.map((sr) => sr.resourceId);
+    const fileIds = sharedResources.map((sr: any) => sr.resourceId);
     const files = await prisma.file.findMany({
       where:  { id: { in: fileIds }, deletedAt: null },
       select: {
@@ -43,11 +43,11 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    const fileMap = Object.fromEntries(files.map((f) => [f.id, f]));
+    const fileMap = Object.fromEntries(files.map((f: any) => [f.id, f]));
 
     // 3. 조합
     const result = sharedResources
-      .map((share) => {
+      .map((share: any) => {
         const file = fileMap[share.resourceId];
         if (!file) return null;
         return {

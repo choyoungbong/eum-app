@@ -433,8 +433,10 @@ model Notification {
   userId    String           @map("user_id")
   type      NotificationType @default(SYSTEM)
   title     String
+  message   String
   body      String?
   link      String?
+  metadata  Json?
   isRead    Boolean          @default(false) @map("is_read")
   createdAt DateTime         @default(now()) @map("created_at")
 

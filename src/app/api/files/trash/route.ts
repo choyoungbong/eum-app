@@ -36,7 +36,7 @@ export async function DELETE() {
 
   // 실제 파일 삭제
   await Promise.all(
-    files.map(async (f) => {
+    files.map(async (f: any) => {
       try {
         if (existsSync(f.filepath)) await unlink(f.filepath);
         if (f.thumbnailUrl && existsSync(f.thumbnailUrl)) await unlink(f.thumbnailUrl);

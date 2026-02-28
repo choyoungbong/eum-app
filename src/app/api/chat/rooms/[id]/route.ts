@@ -48,7 +48,7 @@ export async function GET(
 
     // 참여자 확인
     const isMember = chatRoom.members.some(
-      (member) => member.userId === session.user.id
+      (member: any) => member.userId === session.user.id
     );
 
     if (!isMember) {

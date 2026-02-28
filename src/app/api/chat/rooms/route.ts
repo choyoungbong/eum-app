@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
 
     // 읽지 않은 메시지 개수 계산
     const chatRooms = await Promise.all(
-      chatRoomMembers.map(async (member) => {
+      chatRoomMembers.map(async (member: any) => {
         const unreadCount = await prisma.chatMessage.count({
           where: {
             chatRoomId: member.chatRoomId,

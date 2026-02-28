@@ -1,4 +1,4 @@
-﻿// next.config.js (또는 next.config.mjs)
+﻿// next.config.js
 // Docker standalone 빌드 + 보안 헤더 설정
 
 /** @type {import('next').NextConfig} */
@@ -19,16 +19,18 @@ const nextConfig = {
     serverComponentsExternalPackages: ["sharp", "winston", "socket.io"],
   },
 
-  // ── 보안 헤더 (Nginx가 없는 환경 대비) ──────────────────
+  // ── 보안 헤더 ──────────────────────────────────────────
   async headers() {
     return [
       {
         source: "/:path*",
         headers: [
-          { key: "X-Frame-Options",        value: "SAMEORIGIN" },
-          { key: "X-Content-Type-Options",  value: "nosniff" },
-          { key: "Referrer-Policy",         value: "strict-origin-when-cross-origin" },
-          { key: "Permissions-Policy",      value: "camera=(), microphone=(), geolocation=()" },
+          { key: "X-Frame-Options",       value: "SAMEORIGIN" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy",        value: "strict-origin-when-cross-origin" },
+          // ✅ 핵심 수정: camera=() microphone=() → self 허용
+          // 기존 설정은 카메라/마이크를 완전 차단 → WebRTC 불가
+          { key: "Permissions-Policy",     value: "camera=(self), microphone=(self), geolocation=()" },
         ],
       },
       // 정적 파일 장기 캐시

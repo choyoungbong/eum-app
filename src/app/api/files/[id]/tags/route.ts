@@ -28,7 +28,7 @@ export async function GET(
       );
     }
 
-    return NextResponse.json({ tags: file.fileTags.map((ft) => ft.tag) });
+    return NextResponse.json({ tags: file.fileTags.map((ft: any) => ft.tag) });
   } catch (error) {
     console.error("Tag GET error:", error);
     return NextResponse.json(

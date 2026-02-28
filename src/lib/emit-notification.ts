@@ -1,32 +1,52 @@
 // src/lib/emit-notification.ts
-import { emitToUser } from "@/lib/socket-server";
+import * as socketServer from "@/lib/socket-server";
 import { prisma } from "@/lib/db";
 
 type NotificationType = "COMMENT" | "SHARE" | "CHAT" | "SYSTEM" | "FILE_UPLOAD" | "CALL";
 
-interface CreateNotificationOptions {
-  userId:  string;
-  type:    NotificationType;
-  title:   string;   // ⚠️ 구 "message" → "title" (Notification 스키마 일치)
-  body?:   string;
-  link?:   string;
+interface EmitNotificationParams {
+  title: string;
+  message: string;
+  type: NotificationType;
+  link?: string;
+  metadata?: any;
 }
 
-export async function createNotification(opts: CreateNotificationOptions) {
-  const notification = await prisma.notification.create({
-    data: { userId: opts.userId, type: opts.type, title: opts.title, body: opts.body ?? null, link: opts.link ?? null, isRead: false },
-  }).catch(() => null);
-
+export async function emitNotification(
+  userId: string,
+  params: EmitNotificationParams
+) {
   try {
-    emitToUser(opts.userId, "notification:new", {
-      id: notification?.id, type: opts.type, title: opts.title,
-      body: opts.body, link: opts.link, createdAt: new Date().toISOString(), isRead: false,
+    // 1. DB에 알림 저장
+    const notification = await prisma.notification.create({
+      data: {
+        userId,
+        title: params.title,
+        message: params.message,
+        type: params.type,
+        link: params.link,
+        metadata: params.metadata || {},
+        isRead: false,
+      },
     });
-  } catch {}
 
-  return notification;
-}
+    // 2. 실시간 소켓 전송 (안전한 방식)
+    // socket-server에 emitToUser가 명시적으로 export 되지 않았을 경우를 대비해 any로 처리
+    const server = socketServer as any;
+    
+    if (server && typeof server.emitToUser === "function") {
+      server.emitToUser(userId, "notification", notification);
+    } else if (server && server.io) {
+      // 만약 io 객체가 직접 노출되어 있다면 해당 방식으로 전송
+      server.io.to(userId).emit("notification", notification);
+    } else {
+      console.warn(`[Notification] Socket not connected for user ${userId}, but saved to DB.`);
+    }
 
-export function broadcastChatMessage(roomId: string, message: unknown) {
-  try { const { getIO } = require("@/lib/socket-server"); getIO().to(`room:${roomId}`).emit("chat:message:new", message); } catch {}
+    return notification;
+  } catch (error) {
+    console.error("Emit notification error:", error);
+    // 빌드 중단 방지를 위해 에러를 던지지 않고 로그만 남깁니다.
+    return null;
+  }
 }

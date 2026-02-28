@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/db";
 
-// 폴더 목록 조회
+// 폴더 및 파일 목록 조회
 export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const parentId = searchParams.get("parentId");
 
-    // 특정 폴더의 하위 항목 조회
+    // 특정 폴더의 하위 폴더 목록 조회
     const folders = await prisma.folder.findMany({
       where: {
         userId: session.user.id,
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // 파일도 함께 조회
+    // 특정 폴더 내의 파일 목록 조회
     const files = await prisma.file.findMany({
       where: {
         userId: session.user.id,
@@ -57,9 +57,10 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // BigInt 타입인 size를 문자열로 변환하여 JSON 직렬화 에러 및 타입 에러 방지
     return NextResponse.json({
       folders,
-      files: files.map(f => ({
+      files: files.map((f: any) => ({
         ...f,
         size: f.size.toString(),
       })),
@@ -95,7 +96,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 부모 폴더 확인 (있는 경우)
+    // 부모 폴더가 지정된 경우 권한 및 존재 여부 확인
     if (parentId) {
       const parentFolder = await prisma.folder.findUnique({
         where: { id: parentId },
@@ -116,7 +117,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 같은 이름의 폴더 확인
+    // 동일 위치 내 같은 이름의 폴더가 있는지 중복 확인
     const existingFolder = await prisma.folder.findFirst({
       where: {
         userId: session.user.id,
@@ -132,7 +133,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 폴더 생성
+    // 폴더 생성 실행
     const folder = await prisma.folder.create({
       data: {
         name: name.trim(),

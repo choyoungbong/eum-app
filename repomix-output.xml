@@ -2328,6 +2328,159 @@ export async function GET(
 }
 </file>
 
+<file path="src/app/api/files/upload/route.ts">
+import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { prisma } from "@/lib/db";
+import { writeFile, mkdir } from "fs/promises";
+import { existsSync } from "fs";
+import { join } from "path";
+import crypto from "crypto";
+import sharp from "sharp";
+
+const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
+const MAX_FILE_SIZE = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE || "52428800"); // 50MB
+
+export async function POST(request: NextRequest) {
+  try {
+    // 1. 세션 확인
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
+    }
+
+    const formData = await request.formData();
+    const file = formData.get("file") as File;
+    const folderId = formData.get("folderId") as string | null;
+
+    // 2. 파일 유효성 검사
+    if (!file) {
+      return NextResponse.json({ error: "파일을 선택해주세요" }, { status: 400 });
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json(
+        { error: `파일 크기는 ${MAX_FILE_SIZE / (1024 * 1024)}MB를 초과할 수 없습니다` },
+        { status: 400 }
+      );
+    }
+
+    // 3. 파일 해시 생성 (중복 체크용)
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
+    const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
+
+    /**
+     * 4. 시스템 전체 중복 확인 (Hash 기반)
+     * DB의 hash 필드에 @unique 제약조건이 있으므로, 
+     * 다른 유저가 올린 파일이라도 해시가 같으면 create 시 에러가 발생합니다.
+     */
+    const existingFile = await prisma.file.findFirst({
+      where: { hash: fileHash },
+    });
+
+    if (existingFile) {
+      const isMine = existingFile.userId === session.user.id;
+      return NextResponse.json(
+        { 
+          error: isMine 
+            ? "이미 내 보관함에 동일한 파일이 존재합니다." 
+            : "이미 시스템에 등록된 동일한 내용의 파일입니다.",
+          existingFile: { id: existingFile.id, originalName: existingFile.originalName } 
+        },
+        { status: 409 } // Conflict
+      );
+    }
+
+    // 5. 고유 파일명 및 경로 설정
+    const fileExtension = file.name.split(".").pop() || "bin";
+    const uniqueFilename = `${crypto.randomUUID()}.${fileExtension}`;
+
+    const uploadDir = join(STORAGE_PATH, "files");
+    const thumbnailDir = join(STORAGE_PATH, "thumbnails");
+    
+    if (!existsSync(uploadDir)) await mkdir(uploadDir, { recursive: true });
+    if (!existsSync(thumbnailDir)) await mkdir(thumbnailDir, { recursive: true });
+
+    // 6. 물리 파일 저장
+    const filepath = join(uploadDir, uniqueFilename);
+    await writeFile(filepath, buffer);
+
+    // 7. 썸네일 생성 (이미지인 경우만)
+    let thumbnailUrl: string | null = null;
+    if (file.type.startsWith("image/")) {
+      try {
+        const thumbnailFilename = `thumb_${uniqueFilename.replace(/\.\w+$/, ".jpg")}`;
+        const thumbnailPath = join(thumbnailDir, thumbnailFilename);
+        
+        await sharp(buffer)
+          .resize(300, 300, { fit: "cover", position: "center" })
+          .jpeg({ quality: 80 })
+          .toFile(thumbnailPath);
+        
+        thumbnailUrl = `/api/files/thumbnail/${thumbnailFilename}`;
+      } catch (err) {
+        console.error("Thumbnail generation failed:", err);
+        // 썸네일 실패는 파일 업로드 자체를 중단시키지 않음
+      }
+    }
+
+    /**
+     * 8. DB 저장 및 최종 중복 에러 핸들링
+     * findFirst 이후 create 직전에 다른 요청이 들어올 경우를 대비해 
+     * Prisma의 P2002(Unique 제약 위반) 에러를 Catch합니다.
+     */
+    try {
+      const savedFile = await prisma.file.create({
+        data: {
+          filename: uniqueFilename,
+          originalName: file.name,
+          filepath: filepath,
+          size: BigInt(file.size),
+          mimeType: file.type,
+          hash: fileHash,
+          thumbnailUrl,
+          userId: session.user.id,
+          folderId: folderId || null,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          message: "파일이 업로드되었습니다",
+          file: {
+            id: savedFile.id,
+            filename: savedFile.filename,
+            originalName: savedFile.originalName,
+            size: savedFile.size.toString(),
+            mimeType: savedFile.mimeType,
+            thumbnailUrl: savedFile.thumbnailUrl,
+            createdAt: savedFile.createdAt,
+          },
+        },
+        { status: 201 }
+      );
+    } catch (dbError: any) {
+      if (dbError.code === "P2002") {
+        return NextResponse.json(
+          { error: "이미 존재하는 파일입니다(중복 데이터)." },
+          { status: 409 }
+        );
+      }
+      throw dbError; // 다른 DB 오류는 외부 catch 블록에서 처리
+    }
+
+  } catch (error) {
+    console.error("File upload error:", error);
+    return NextResponse.json(
+      { error: "파일 업로드 중 오류가 발생했습니다" },
+      { status: 500 }
+    );
+  }
+}
+</file>
+
 <file path="src/app/api/folders/[id]/route.ts">
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
@@ -9110,159 +9263,6 @@ export async function DELETE() {
 }
 </file>
 
-<file path="src/app/api/files/upload/route.ts">
-import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { prisma } from "@/lib/db";
-import { writeFile, mkdir } from "fs/promises";
-import { existsSync } from "fs";
-import { join } from "path";
-import crypto from "crypto";
-import sharp from "sharp";
-
-const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
-const MAX_FILE_SIZE = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE || "52428800"); // 50MB
-
-export async function POST(request: NextRequest) {
-  try {
-    // 1. 세션 확인
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
-    }
-
-    const formData = await request.formData();
-    const file = formData.get("file") as File;
-    const folderId = formData.get("folderId") as string | null;
-
-    // 2. 파일 유효성 검사
-    if (!file) {
-      return NextResponse.json({ error: "파일을 선택해주세요" }, { status: 400 });
-    }
-
-    if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json(
-        { error: `파일 크기는 ${MAX_FILE_SIZE / (1024 * 1024)}MB를 초과할 수 없습니다` },
-        { status: 400 }
-      );
-    }
-
-    // 3. 파일 해시 생성 (중복 체크용)
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-    const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
-
-    /**
-     * 4. 시스템 전체 중복 확인 (Hash 기반)
-     * DB의 hash 필드에 @unique 제약조건이 있으므로, 
-     * 다른 유저가 올린 파일이라도 해시가 같으면 create 시 에러가 발생합니다.
-     */
-    const existingFile = await prisma.file.findFirst({
-      where: { hash: fileHash },
-    });
-
-    if (existingFile) {
-      const isMine = existingFile.userId === session.user.id;
-      return NextResponse.json(
-        { 
-          error: isMine 
-            ? "이미 내 보관함에 동일한 파일이 존재합니다." 
-            : "이미 시스템에 등록된 동일한 내용의 파일입니다.",
-          existingFile: { id: existingFile.id, originalName: existingFile.originalName } 
-        },
-        { status: 409 } // Conflict
-      );
-    }
-
-    // 5. 고유 파일명 및 경로 설정
-    const fileExtension = file.name.split(".").pop() || "bin";
-    const uniqueFilename = `${crypto.randomUUID()}.${fileExtension}`;
-
-    const uploadDir = join(STORAGE_PATH, "files");
-    const thumbnailDir = join(STORAGE_PATH, "thumbnails");
-    
-    if (!existsSync(uploadDir)) await mkdir(uploadDir, { recursive: true });
-    if (!existsSync(thumbnailDir)) await mkdir(thumbnailDir, { recursive: true });
-
-    // 6. 물리 파일 저장
-    const filepath = join(uploadDir, uniqueFilename);
-    await writeFile(filepath, buffer);
-
-    // 7. 썸네일 생성 (이미지인 경우만)
-    let thumbnailUrl: string | null = null;
-    if (file.type.startsWith("image/")) {
-      try {
-        const thumbnailFilename = `thumb_${uniqueFilename.replace(/\.\w+$/, ".jpg")}`;
-        const thumbnailPath = join(thumbnailDir, thumbnailFilename);
-        
-        await sharp(buffer)
-          .resize(300, 300, { fit: "cover", position: "center" })
-          .jpeg({ quality: 80 })
-          .toFile(thumbnailPath);
-        
-        thumbnailUrl = `/api/files/thumbnail/${thumbnailFilename}`;
-      } catch (err) {
-        console.error("Thumbnail generation failed:", err);
-        // 썸네일 실패는 파일 업로드 자체를 중단시키지 않음
-      }
-    }
-
-    /**
-     * 8. DB 저장 및 최종 중복 에러 핸들링
-     * findFirst 이후 create 직전에 다른 요청이 들어올 경우를 대비해 
-     * Prisma의 P2002(Unique 제약 위반) 에러를 Catch합니다.
-     */
-    try {
-      const savedFile = await prisma.file.create({
-        data: {
-          filename: uniqueFilename,
-          originalName: file.name,
-          filepath: filepath,
-          size: BigInt(file.size),
-          mimeType: file.type,
-          hash: fileHash,
-          thumbnailUrl,
-          userId: session.user.id,
-          folderId: folderId || null,
-        },
-      });
-
-      return NextResponse.json(
-        {
-          message: "파일이 업로드되었습니다",
-          file: {
-            id: savedFile.id,
-            filename: savedFile.filename,
-            originalName: savedFile.originalName,
-            size: savedFile.size.toString(),
-            mimeType: savedFile.mimeType,
-            thumbnailUrl: savedFile.thumbnailUrl,
-            createdAt: savedFile.createdAt,
-          },
-        },
-        { status: 201 }
-      );
-    } catch (dbError: any) {
-      if (dbError.code === "P2002") {
-        return NextResponse.json(
-          { error: "이미 존재하는 파일입니다(중복 데이터)." },
-          { status: 409 }
-        );
-      }
-      throw dbError; // 다른 DB 오류는 외부 catch 블록에서 처리
-    }
-
-  } catch (error) {
-    console.error("File upload error:", error);
-    return NextResponse.json(
-      { error: "파일 업로드 중 오류가 발생했습니다" },
-      { status: 500 }
-    );
-  }
-}
-</file>
-
 <file path="src/app/api/folders/[id]/download/route.ts">
 // src/app/api/folders/[id]/download/route.ts
 // GET — 폴더 전체를 ZIP으로 압축해 다운로드
@@ -10899,6 +10899,371 @@ export default function BannedPage() {
           </Link>
         </div>
       </div>
+    </div>
+  );
+}
+</file>
+
+<file path="src/app/chat/page.tsx">
+"use client";
+
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
+import { useSocket } from "@/hooks/useSocket";
+import { toast } from "@/components/Toast";
+
+interface ChatRoom {
+  id: string;
+  name: string | null;
+  type: "DIRECT" | "GROUP";
+  members: any[];
+  messages: any[];
+  unreadCount: number;
+  updatedAt: string;
+}
+
+export default function ChatPage() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+  const { socket, isConnected } = useSocket();
+
+  const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showNewChatModal, setShowNewChatModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+
+  useEffect(() => {
+    if (status === "unauthenticated") router.push("/login");
+  }, [status, router]);
+
+  const fetchChatRooms = useCallback(async () => {
+    try {
+      const res = await fetch("/api/chat/rooms");
+      if (res.ok) {
+        const data = await res.json();
+        setChatRooms(data.chatRooms || []);
+      }
+    } catch (err) {
+      console.error("채팅방 목록 로드 실패:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (session) fetchChatRooms();
+  }, [session, fetchChatRooms]);
+
+  // ✅ 실시간: 다른 채팅방에서 새 메시지 오면 목록 순서/미리보기 갱신
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleNewMessage = (data: any) => {
+      setChatRooms((prev) => {
+        const roomIndex = prev.findIndex((r) => r.id === data.chatRoomId);
+        if (roomIndex === -1) return prev;
+
+        const updated = [...prev];
+        const room = { ...updated[roomIndex] };
+
+        // 마지막 메시지 업데이트
+        room.messages = [data];
+        room.updatedAt = data.createdAt || new Date().toISOString();
+
+        // 내가 보낸 메시지가 아니면 unread 증가
+        if (data.senderId !== session?.user?.id) {
+          room.unreadCount = (room.unreadCount || 0) + 1;
+        }
+
+        // 해당 방을 맨 위로 올리기
+        updated.splice(roomIndex, 1);
+        return [room, ...updated];
+      });
+    };
+
+    socket.on("message:receive", handleNewMessage);
+    socket.on("message:new", handleNewMessage);
+
+    return () => {
+      socket.off("message:receive", handleNewMessage);
+      socket.off("message:new", handleNewMessage);
+    };
+  }, [socket, session?.user?.id]);
+
+  const searchUsers = async () => {
+    if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    try {
+      const res = await fetch(
+        `/api/users/search?q=${encodeURIComponent(searchQuery)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setSearchResults(data.users || []);
+        if ((data.users || []).length === 0) {
+          toast.info("검색 결과가 없습니다");
+        }
+      }
+    } catch {
+      toast.error("사용자 검색에 실패했습니다");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const createChatRoom = async (otherUserId: string) => {
+    setIsCreating(true);
+    try {
+      const res = await fetch("/api/chat/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "DIRECT", memberIds: [otherUserId] }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        router.push(`/chat/${data.chatRoom.id}`);
+      } else {
+        // ✅ alert() → toast.error()
+        toast.error("채팅방 생성에 실패했습니다");
+      }
+    } catch {
+      toast.error("채팅방 생성 중 오류가 발생했습니다");
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const closeModal = () => {
+    setShowNewChatModal(false);
+    setSearchResults([]);
+    setSearchQuery("");
+  };
+
+  const getChatRoomName = (chatRoom: ChatRoom) => {
+    if (chatRoom.type === "GROUP") return chatRoom.name || "그룹 채팅";
+    const other = chatRoom.members.find(
+      (m) => m.user.id !== session?.user?.id
+    );
+    return other?.user.name || "알 수 없음";
+  };
+
+  const getChatRoomInitial = (chatRoom: ChatRoom) => {
+    return getChatRoomName(chatRoom)[0]?.toUpperCase() || "?";
+  };
+
+  const getLastMessage = (chatRoom: ChatRoom) => {
+    if (!chatRoom.messages?.length) return "메시지가 없습니다";
+    const last = chatRoom.messages[0];
+    if (last.type === "FILE") return "📎 파일";
+    if (last.type === "CALL_LOG") return "📞 통화";
+    return last.content || "메시지가 없습니다";
+  };
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return "";
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    if (isToday) {
+      return date.toLocaleTimeString("ko-KR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+    return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
+  };
+
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-gray-400">로딩 중...</div>
+      </div>
+    );
+  }
+
+  if (!session) return null;
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* ── 헤더 ── */}
+      <header className="bg-white border-b sticky top-0 z-10">
+        <div className="max-w-2xl mx-auto px-4 py-4 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-bold text-gray-900">💬 채팅</h1>
+            {/* ✅ isConnected 이제 실제로 작동 */}
+            <span
+              className={`w-2 h-2 rounded-full ${
+                isConnected ? "bg-green-500" : "bg-gray-300"
+              }`}
+              title={isConnected ? "연결됨" : "연결 중..."}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/dashboard"
+              className="text-sm text-gray-500 hover:text-gray-700"
+            >
+              ← 대시보드
+            </Link>
+            <button
+              onClick={() => setShowNewChatModal(true)}
+              className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 font-medium"
+            >
+              + 새 채팅
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* ── 채팅방 목록 ── */}
+      <main className="max-w-2xl mx-auto px-4 py-4">
+        {loading ? (
+          // 스켈레톤 UI
+          <div className="space-y-1">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="bg-white rounded-xl p-4 flex gap-3 animate-pulse"
+              >
+                <div className="w-12 h-12 rounded-full bg-gray-200 flex-shrink-0" />
+                <div className="flex-1 space-y-2 py-1">
+                  <div className="h-4 bg-gray-200 rounded w-1/3" />
+                  <div className="h-3 bg-gray-100 rounded w-2/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : chatRooms.length === 0 ? (
+          <div className="text-center py-16">
+            <p className="text-4xl mb-4">💬</p>
+            <p className="text-gray-500 mb-4">아직 대화가 없어요</p>
+            <button
+              onClick={() => setShowNewChatModal(true)}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium"
+            >
+              첫 채팅 시작하기
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {chatRooms.map((chatRoom) => (
+              <Link
+                key={chatRoom.id}
+                href={`/chat/${chatRoom.id}`}
+                className="flex items-center gap-3 bg-white hover:bg-gray-50 rounded-xl p-4 transition"
+              >
+                {/* 아바타 */}
+                <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-lg flex-shrink-0">
+                  {getChatRoomInitial(chatRoom)}
+                </div>
+
+                {/* 내용 */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="font-semibold text-gray-900 text-sm">
+                      {getChatRoomName(chatRoom)}
+                    </span>
+                    <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
+                      {formatDate(chatRoom.updatedAt)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-gray-500 truncate">
+                      {getLastMessage(chatRoom)}
+                    </p>
+                    {chatRoom.unreadCount > 0 && (
+                      <span className="ml-2 min-w-[20px] h-5 px-1.5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center flex-shrink-0">
+                        {chatRoom.unreadCount > 99 ? "99+" : chatRoom.unreadCount}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </main>
+
+      {/* ── 새 채팅 모달 ── */}
+      {showNewChatModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+          onClick={closeModal}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold mb-4 text-gray-900">
+              새 채팅 시작
+            </h3>
+
+            <div className="flex gap-2 mb-4">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && searchUsers()}
+                placeholder="이름 또는 이메일로 검색"
+                className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl outline-none focus:border-blue-500 text-gray-900 bg-gray-50 text-sm"
+                autoFocus
+              />
+              <button
+                onClick={searchUsers}
+                disabled={isSearching}
+                className="px-4 py-2.5 bg-blue-600 text-white rounded-xl font-medium text-sm disabled:opacity-50"
+              >
+                {isSearching ? "..." : "검색"}
+              </button>
+            </div>
+
+            {searchResults.length > 0 && (
+              <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
+                {searchResults.map((user) => (
+                  <button
+                    key={user.id}
+                    onClick={() => createChatRoom(user.id)}
+                    disabled={isCreating}
+                    className="w-full p-3 text-left border border-gray-100 rounded-xl hover:bg-blue-50 hover:border-blue-200 transition disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-sm flex-shrink-0">
+                        {user.name?.[0]?.toUpperCase() || "?"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-900 text-sm">
+                          {user.name}
+                        </p>
+                        <p className="text-xs text-gray-500 truncate">
+                          {user.email}
+                        </p>
+                      </div>
+                      {user.isOnline && (
+                        <span className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0" />
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 text-gray-500 hover:bg-gray-100 rounded-xl text-sm font-medium"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -19754,6 +20119,185 @@ export async function GET() {
 }
 </file>
 
+<file path="src/app/api/chat/rooms/[id]/messages/route.ts">
+import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import { sendChatMessageNotification, sendFileSharedNotification } from "@/lib/fcm";
+
+// BigInt 직렬화 유틸
+function serialize(data: any) {
+  return JSON.parse(
+    JSON.stringify(data, (key, value) =>
+      typeof value === "bigint" ? value.toString() : value
+    )
+  );
+}
+
+// ─── GET: 메시지 목록 조회 ───────────────────────────────
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
+    }
+
+    const chatRoomId = params.id;
+    const { searchParams } = new URL(request.url);
+    const limit = parseInt(searchParams.get("limit") || "50");
+    const before = searchParams.get("before");
+
+    // 멤버십 확인
+    const membership = await prisma.chatRoomMember.findFirst({
+      where: { chatRoomId, userId: session.user.id },
+    });
+
+    if (!membership) {
+      return NextResponse.json(
+        { error: "채팅방에 참여하지 않았습니다" },
+        { status: 403 }
+      );
+    }
+
+    const messages = await prisma.chatMessage.findMany({
+      where: {
+        chatRoomId,
+        ...(before && { createdAt: { lt: new Date(before) } }),
+      },
+      include: {
+        sender: { select: { id: true, name: true, email: true } },
+        file: { select: { id: true, originalName: true, size: true, mimeType: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+
+    return NextResponse.json(serialize({ messages: messages.reverse() }));
+  } catch (error) {
+    console.error("GET Messages Error:", error);
+    return NextResponse.json({ error: "메시지 조회 실패" }, { status: 500 });
+  }
+}
+
+// ─── POST: 메시지 전송 ────────────────────────────────────
+export async function POST(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
+    }
+
+    const chatRoomId = params.id;
+    const { type, content, fileId, callId } = await request.json();
+
+    // 메시지 생성
+    const message = await prisma.chatMessage.create({
+      data: {
+        chatRoomId,
+        senderId: session.user.id,
+        type,
+        content:
+          type === "TEXT" || type === "CALL_LOG" || type === "SYSTEM"
+            ? content
+            : null,
+        fileId: type === "FILE" ? fileId : null,
+        callId: callId || null,
+      },
+      include: {
+        sender: { select: { id: true, name: true, email: true } },
+        file: true,
+      },
+    });
+
+    const serializedMessage = serialize(message);
+
+    // ✅ 이벤트명 통일: "message:new" → "message:receive"
+    // (클라이언트 useSocket.ts의 listen 이벤트와 일치)
+    const io = (global as any).io;
+    if (io) {
+      io.to(`chat:${chatRoomId}`).emit("message:receive", serializedMessage);
+      console.log(`📡 소켓 브로드캐스트: chat:${chatRoomId}`);
+    } else {
+      console.warn("⚠️ global.io 없음 — 소켓 서버 상태 확인 필요");
+    }
+
+    // 채팅방 멤버 조회 (파일 권한 + FCM용)
+    const members = await prisma.chatRoomMember.findMany({
+      where: { chatRoomId },
+      include: { user: { select: { id: true, name: true, fcmToken: true } } },
+    });
+
+    // 파일 공유 시 멤버들에게 권한 부여
+    if (type === "FILE" && fileId) {
+      for (const member of members) {
+        if (member.userId !== session.user.id) {
+          await prisma.sharedResource.upsert({
+            where: {
+              resourceType_resourceId_sharedWithId: {
+                resourceType: "FILE",
+                resourceId: fileId,
+                sharedWithId: member.userId,
+              },
+            },
+            update: {},
+            create: {
+              resourceType: "FILE",
+              resourceId: fileId,
+              ownerId: session.user.id,
+              sharedWithId: member.userId,
+              permission: "VIEW",
+            },
+          });
+        }
+      }
+    }
+
+    // 채팅방 updatedAt 갱신
+    await prisma.chatRoom.update({
+      where: { id: chatRoomId },
+      data: { updatedAt: new Date() },
+    });
+
+    // FCM 푸시 알림 (나 제외한 멤버들)
+    for (const member of members) {
+      if (member.userId !== session.user.id && member.user.fcmToken) {
+        try {
+          if (type === "TEXT") {
+            await sendChatMessageNotification(
+              member.user.fcmToken,
+              session.user.name || "사용자",
+              content,
+              chatRoomId
+            );
+          } else if (type === "FILE" && message.file) {
+            await sendFileSharedNotification(
+              member.user.fcmToken,
+              session.user.name || "사용자",
+              (message.file as any).originalName,
+              chatRoomId
+            );
+          }
+        } catch (error) {
+          console.error(`❌ FCM 실패 (${member.user.name}):`, error);
+        }
+      }
+    }
+
+    return NextResponse.json({ data: serializedMessage }, { status: 201 });
+  } catch (error) {
+    console.error("POST Message Error:", error);
+    return NextResponse.json({ error: "메시지 전송 실패" }, { status: 500 });
+  }
+}
+</file>
+
 <file path="src/app/api/notifications/preferences/route.ts">
 // src/app/api/notifications/preferences/route.ts
 // ⚠️ 수정: export const/interface → @/lib/notification-prefs 로 분리
@@ -20063,371 +20607,6 @@ export async function DELETE() {
     console.error("DELETE /api/users/me error:", error);
     return NextResponse.json({ error: "서버 오류가 발생했습니다" }, { status: 500 });
   }
-}
-</file>
-
-<file path="src/app/chat/page.tsx">
-"use client";
-
-import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
-import { useSocket } from "@/hooks/useSocket";
-import { toast } from "@/components/Toast";
-
-interface ChatRoom {
-  id: string;
-  name: string | null;
-  type: "DIRECT" | "GROUP";
-  members: any[];
-  messages: any[];
-  unreadCount: number;
-  updatedAt: string;
-}
-
-export default function ChatPage() {
-  const { data: session, status } = useSession();
-  const router = useRouter();
-  const { socket, isConnected } = useSocket();
-
-  const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showNewChatModal, setShowNewChatModal] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isCreating, setIsCreating] = useState(false);
-
-  useEffect(() => {
-    if (status === "unauthenticated") router.push("/login");
-  }, [status, router]);
-
-  const fetchChatRooms = useCallback(async () => {
-    try {
-      const res = await fetch("/api/chat/rooms");
-      if (res.ok) {
-        const data = await res.json();
-        setChatRooms(data.chatRooms || []);
-      }
-    } catch (err) {
-      console.error("채팅방 목록 로드 실패:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (session) fetchChatRooms();
-  }, [session, fetchChatRooms]);
-
-  // ✅ 실시간: 다른 채팅방에서 새 메시지 오면 목록 순서/미리보기 갱신
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleNewMessage = (data: any) => {
-      setChatRooms((prev) => {
-        const roomIndex = prev.findIndex((r) => r.id === data.chatRoomId);
-        if (roomIndex === -1) return prev;
-
-        const updated = [...prev];
-        const room = { ...updated[roomIndex] };
-
-        // 마지막 메시지 업데이트
-        room.messages = [data];
-        room.updatedAt = data.createdAt || new Date().toISOString();
-
-        // 내가 보낸 메시지가 아니면 unread 증가
-        if (data.senderId !== session?.user?.id) {
-          room.unreadCount = (room.unreadCount || 0) + 1;
-        }
-
-        // 해당 방을 맨 위로 올리기
-        updated.splice(roomIndex, 1);
-        return [room, ...updated];
-      });
-    };
-
-    socket.on("message:receive", handleNewMessage);
-    socket.on("message:new", handleNewMessage);
-
-    return () => {
-      socket.off("message:receive", handleNewMessage);
-      socket.off("message:new", handleNewMessage);
-    };
-  }, [socket, session?.user?.id]);
-
-  const searchUsers = async () => {
-    if (!searchQuery.trim()) return;
-    setIsSearching(true);
-    try {
-      const res = await fetch(
-        `/api/users/search?q=${encodeURIComponent(searchQuery)}`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setSearchResults(data.users || []);
-        if ((data.users || []).length === 0) {
-          toast.info("검색 결과가 없습니다");
-        }
-      }
-    } catch {
-      toast.error("사용자 검색에 실패했습니다");
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const createChatRoom = async (otherUserId: string) => {
-    setIsCreating(true);
-    try {
-      const res = await fetch("/api/chat/rooms", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "DIRECT", memberIds: [otherUserId] }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        router.push(`/chat/${data.chatRoom.id}`);
-      } else {
-        // ✅ alert() → toast.error()
-        toast.error("채팅방 생성에 실패했습니다");
-      }
-    } catch {
-      toast.error("채팅방 생성 중 오류가 발생했습니다");
-    } finally {
-      setIsCreating(false);
-    }
-  };
-
-  const closeModal = () => {
-    setShowNewChatModal(false);
-    setSearchResults([]);
-    setSearchQuery("");
-  };
-
-  const getChatRoomName = (chatRoom: ChatRoom) => {
-    if (chatRoom.type === "GROUP") return chatRoom.name || "그룹 채팅";
-    const other = chatRoom.members.find(
-      (m) => m.user.id !== session?.user?.id
-    );
-    return other?.user.name || "알 수 없음";
-  };
-
-  const getChatRoomInitial = (chatRoom: ChatRoom) => {
-    return getChatRoomName(chatRoom)[0]?.toUpperCase() || "?";
-  };
-
-  const getLastMessage = (chatRoom: ChatRoom) => {
-    if (!chatRoom.messages?.length) return "메시지가 없습니다";
-    const last = chatRoom.messages[0];
-    if (last.type === "FILE") return "📎 파일";
-    if (last.type === "CALL_LOG") return "📞 통화";
-    return last.content || "메시지가 없습니다";
-  };
-
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) return "";
-    const now = new Date();
-    const isToday = date.toDateString() === now.toDateString();
-    if (isToday) {
-      return date.toLocaleTimeString("ko-KR", {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    }
-    return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
-  };
-
-  if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-gray-400">로딩 중...</div>
-      </div>
-    );
-  }
-
-  if (!session) return null;
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      {/* ── 헤더 ── */}
-      <header className="bg-white border-b sticky top-0 z-10">
-        <div className="max-w-2xl mx-auto px-4 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-bold text-gray-900">💬 채팅</h1>
-            {/* ✅ isConnected 이제 실제로 작동 */}
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isConnected ? "bg-green-500" : "bg-gray-300"
-              }`}
-              title={isConnected ? "연결됨" : "연결 중..."}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Link
-              href="/dashboard"
-              className="text-sm text-gray-500 hover:text-gray-700"
-            >
-              ← 대시보드
-            </Link>
-            <button
-              onClick={() => setShowNewChatModal(true)}
-              className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 font-medium"
-            >
-              + 새 채팅
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* ── 채팅방 목록 ── */}
-      <main className="max-w-2xl mx-auto px-4 py-4">
-        {loading ? (
-          // 스켈레톤 UI
-          <div className="space-y-1">
-            {[1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className="bg-white rounded-xl p-4 flex gap-3 animate-pulse"
-              >
-                <div className="w-12 h-12 rounded-full bg-gray-200 flex-shrink-0" />
-                <div className="flex-1 space-y-2 py-1">
-                  <div className="h-4 bg-gray-200 rounded w-1/3" />
-                  <div className="h-3 bg-gray-100 rounded w-2/3" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : chatRooms.length === 0 ? (
-          <div className="text-center py-16">
-            <p className="text-4xl mb-4">💬</p>
-            <p className="text-gray-500 mb-4">아직 대화가 없어요</p>
-            <button
-              onClick={() => setShowNewChatModal(true)}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium"
-            >
-              첫 채팅 시작하기
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-1">
-            {chatRooms.map((chatRoom) => (
-              <Link
-                key={chatRoom.id}
-                href={`/chat/${chatRoom.id}`}
-                className="flex items-center gap-3 bg-white hover:bg-gray-50 rounded-xl p-4 transition"
-              >
-                {/* 아바타 */}
-                <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-lg flex-shrink-0">
-                  {getChatRoomInitial(chatRoom)}
-                </div>
-
-                {/* 내용 */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-0.5">
-                    <span className="font-semibold text-gray-900 text-sm">
-                      {getChatRoomName(chatRoom)}
-                    </span>
-                    <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
-                      {formatDate(chatRoom.updatedAt)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm text-gray-500 truncate">
-                      {getLastMessage(chatRoom)}
-                    </p>
-                    {chatRoom.unreadCount > 0 && (
-                      <span className="ml-2 min-w-[20px] h-5 px-1.5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center flex-shrink-0">
-                        {chatRoom.unreadCount > 99 ? "99+" : chatRoom.unreadCount}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        )}
-      </main>
-
-      {/* ── 새 채팅 모달 ── */}
-      {showNewChatModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4"
-          onClick={closeModal}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-bold mb-4 text-gray-900">
-              새 채팅 시작
-            </h3>
-
-            <div className="flex gap-2 mb-4">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && searchUsers()}
-                placeholder="이름 또는 이메일로 검색"
-                className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl outline-none focus:border-blue-500 text-gray-900 bg-gray-50 text-sm"
-                autoFocus
-              />
-              <button
-                onClick={searchUsers}
-                disabled={isSearching}
-                className="px-4 py-2.5 bg-blue-600 text-white rounded-xl font-medium text-sm disabled:opacity-50"
-              >
-                {isSearching ? "..." : "검색"}
-              </button>
-            </div>
-
-            {searchResults.length > 0 && (
-              <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
-                {searchResults.map((user) => (
-                  <button
-                    key={user.id}
-                    onClick={() => createChatRoom(user.id)}
-                    disabled={isCreating}
-                    className="w-full p-3 text-left border border-gray-100 rounded-xl hover:bg-blue-50 hover:border-blue-200 transition disabled:opacity-50"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-sm flex-shrink-0">
-                        {user.name?.[0]?.toUpperCase() || "?"}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 text-sm">
-                          {user.name}
-                        </p>
-                        <p className="text-xs text-gray-500 truncate">
-                          {user.email}
-                        </p>
-                      </div>
-                      {user.isOnline && (
-                        <span className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0" />
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="flex justify-end">
-              <button
-                onClick={closeModal}
-                className="px-4 py-2 text-gray-500 hover:bg-gray-100 rounded-xl text-sm font-medium"
-              >
-                닫기
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
 }
 </file>
 
@@ -21166,444 +21345,6 @@ const handler = NextAuth(authOptions);
 export { handler as GET, handler as POST };
 </file>
 
-<file path="src/lib/socket-server.ts">
-import { Server as NetServer } from "http";
-import { Server as SocketIOServer } from "socket.io";
-import { prisma } from "@/lib/db";
-
-// 전역 변수로 IO 인스턴스 관리
-let globalIo: SocketIOServer | null = null;
-
-export const initSocketServer = (httpServer: NetServer) => {
-  const io = new SocketIOServer(httpServer, {
-    path: "/api/socket/io",
-    addTrailingSlash: false,
-    cors: { origin: "*", methods: ["GET", "POST"] },
-  });
-
-  globalIo = io;
-
-  io.on("connection", (socket: any) => {
-    const userId = socket.handshake.query.userId;
-    if (!userId) return;
-    
-    socket.join(`user:${userId}`);
-
-    // 통화 요청
-    socket.on("call:initiate", async ({ chatRoomId, receiverId, callType, offer }: any) => {
-      try {
-        const call = await prisma.call.create({
-          data: {
-            chatRoomId,
-            initiatorId: userId,
-            receiverId,
-            type: callType,
-            // ✅ status를 "RINGING" 대신 Prisma Enum 표준인 "PENDING"으로 수정
-            status: "PENDING", 
-          },
-        });
-        
-        io.to(`user:${receiverId}`).emit("call:incoming", {
-          callId: call.id,
-          from: userId,
-          callerName: socket.user?.name || "상대방",
-          callType,
-          offer,
-        });
-      } catch (error) { 
-        console.error("Call creation error:", error); 
-      }
-    });
-
-    socket.on("call:accept", ({ callerId, answer }: any) => {
-      io.to(`user:${callerId}`).emit("call:accepted", { answer });
-    });
-
-    socket.on("call:ice-candidate", ({ otherUserId, candidate }: any) => {
-      io.to(`user:${otherUserId}`).emit("call:ice-candidate", { candidate });
-    });
-
-    socket.on("call:reject", async ({ callerId }: any) => {
-      try {
-        await prisma.call.updateMany({
-          where: { 
-            initiatorId: callerId, 
-            receiverId: userId, 
-            status: "PENDING" // ✅ 여기도 PENDING으로 수정
-          },
-          data: { status: "REJECTED" },
-        });
-        io.to(`user:${callerId}`).emit("call:rejected");
-      } catch (error) {
-        console.error("Call reject error:", error);
-      }
-    });
-
-    socket.on("call:end", ({ otherUserId }: any) => {
-      io.to(`user:${otherUserId}`).emit("call:ended");
-    });
-
-    socket.on("disconnect", () => { 
-      socket.leave(`user:${userId}`); 
-    });
-  });
-
-  return io;
-};
-
-// 알림 전송용 함수
-export const emitToUser = (userId: string, event: string, data: any) => {
-  if (globalIo) {
-    globalIo.to(`user:${userId}`).emit(event, data);
-  } else {
-    console.warn("Socket.io server is not initialized yet.");
-  }
-};
-</file>
-
-<file path="src/app/api/chat/rooms/[id]/messages/route.ts">
-import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/db";
-import { sendChatMessageNotification, sendFileSharedNotification } from "@/lib/fcm";
-
-// BigInt 직렬화 유틸
-function serialize(data: any) {
-  return JSON.parse(
-    JSON.stringify(data, (key, value) =>
-      typeof value === "bigint" ? value.toString() : value
-    )
-  );
-}
-
-// ─── GET: 메시지 목록 조회 ───────────────────────────────
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
-    }
-
-    const chatRoomId = params.id;
-    const { searchParams } = new URL(request.url);
-    const limit = parseInt(searchParams.get("limit") || "50");
-    const before = searchParams.get("before");
-
-    // 멤버십 확인
-    const membership = await prisma.chatRoomMember.findFirst({
-      where: { chatRoomId, userId: session.user.id },
-    });
-
-    if (!membership) {
-      return NextResponse.json(
-        { error: "채팅방에 참여하지 않았습니다" },
-        { status: 403 }
-      );
-    }
-
-    const messages = await prisma.chatMessage.findMany({
-      where: {
-        chatRoomId,
-        ...(before && { createdAt: { lt: new Date(before) } }),
-      },
-      include: {
-        sender: { select: { id: true, name: true, email: true } },
-        file: { select: { id: true, originalName: true, size: true, mimeType: true } },
-      },
-      orderBy: { createdAt: "desc" },
-      take: limit,
-    });
-
-    return NextResponse.json(serialize({ messages: messages.reverse() }));
-  } catch (error) {
-    console.error("GET Messages Error:", error);
-    return NextResponse.json({ error: "메시지 조회 실패" }, { status: 500 });
-  }
-}
-
-// ─── POST: 메시지 전송 ────────────────────────────────────
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
-    }
-
-    const chatRoomId = params.id;
-    const { type, content, fileId, callId } = await request.json();
-
-    // 메시지 생성
-    const message = await prisma.chatMessage.create({
-      data: {
-        chatRoomId,
-        senderId: session.user.id,
-        type,
-        content:
-          type === "TEXT" || type === "CALL_LOG" || type === "SYSTEM"
-            ? content
-            : null,
-        fileId: type === "FILE" ? fileId : null,
-        callId: callId || null,
-      },
-      include: {
-        sender: { select: { id: true, name: true, email: true } },
-        file: true,
-      },
-    });
-
-    const serializedMessage = serialize(message);
-
-    // ✅ 이벤트명 통일: "message:new" → "message:receive"
-    // (클라이언트 useSocket.ts의 listen 이벤트와 일치)
-    const io = (global as any).io;
-    if (io) {
-      io.to(`chat:${chatRoomId}`).emit("message:receive", serializedMessage);
-      console.log(`📡 소켓 브로드캐스트: chat:${chatRoomId}`);
-    } else {
-      console.warn("⚠️ global.io 없음 — 소켓 서버 상태 확인 필요");
-    }
-
-    // 채팅방 멤버 조회 (파일 권한 + FCM용)
-    const members = await prisma.chatRoomMember.findMany({
-      where: { chatRoomId },
-      include: { user: { select: { id: true, name: true, fcmToken: true } } },
-    });
-
-    // 파일 공유 시 멤버들에게 권한 부여
-    if (type === "FILE" && fileId) {
-      for (const member of members) {
-        if (member.userId !== session.user.id) {
-          await prisma.sharedResource.upsert({
-            where: {
-              resourceType_resourceId_sharedWithId: {
-                resourceType: "FILE",
-                resourceId: fileId,
-                sharedWithId: member.userId,
-              },
-            },
-            update: {},
-            create: {
-              resourceType: "FILE",
-              resourceId: fileId,
-              ownerId: session.user.id,
-              sharedWithId: member.userId,
-              permission: "VIEW",
-            },
-          });
-        }
-      }
-    }
-
-    // 채팅방 updatedAt 갱신
-    await prisma.chatRoom.update({
-      where: { id: chatRoomId },
-      data: { updatedAt: new Date() },
-    });
-
-    // FCM 푸시 알림 (나 제외한 멤버들)
-    for (const member of members) {
-      if (member.userId !== session.user.id && member.user.fcmToken) {
-        try {
-          if (type === "TEXT") {
-            await sendChatMessageNotification(
-              member.user.fcmToken,
-              session.user.name || "사용자",
-              content,
-              chatRoomId
-            );
-          } else if (type === "FILE" && message.file) {
-            await sendFileSharedNotification(
-              member.user.fcmToken,
-              session.user.name || "사용자",
-              (message.file as any).originalName,
-              chatRoomId
-            );
-          }
-        } catch (error) {
-          console.error(`❌ FCM 실패 (${member.user.name}):`, error);
-        }
-      }
-    }
-
-    return NextResponse.json({ data: serializedMessage }, { status: 201 });
-  } catch (error) {
-    console.error("POST Message Error:", error);
-    return NextResponse.json({ error: "메시지 전송 실패" }, { status: 500 });
-  }
-}
-</file>
-
-<file path="src/app/layout.tsx">
-import type { Metadata } from "next";
-import { Providers } from "./providers";
-import PWAInstaller from "@/components/PWAInstaller";
-import "./globals.css";
-
-export const metadata: Metadata = {
-  title: "이음 (Eum)",
-  description: "사람과 파일을 잇다 - 나만의 퍼스널 클라우드",
-  manifest: "/manifest.json",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "black-translucent",
-    title: "이음",
-  },
-  other: {
-    "mobile-web-app-capable": "yes",
-    "apple-mobile-web-app-capable": "yes",
-    "apple-mobile-web-app-status-bar-style": "black-translucent",
-  },
-};
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="ko" suppressHydrationWarning>
-      <head>
-        <link
-          rel="stylesheet"
-          href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
-        />
-        <link rel="manifest" href="/manifest.json" />
-        <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-        <meta name="theme-color" content="#7c3aed" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-      </head>
-      <body suppressHydrationWarning>
-        <Providers>
-          {children}
-          <PWAInstaller />
-        </Providers>
-      </body>
-    </html>
-  );
-}
-</file>
-
-<file path="src/app/providers.tsx">
-"use client";
-// src/app/providers.tsx — 최종 통합본 (소켓 포함)
-
-import { SessionProvider } from "next-auth/react";
-import { ThemeProvider } from "next-themes";
-import { ToastProvider } from "@/components/Toast";
-import KeyboardShortcuts from "@/components/KeyboardShortcuts";
-import OnboardingTour from "@/components/OnboardingTour";
-import MobileBottomNav from "@/components/MobileBottomNav";
-import SystemNoticeBanner from "@/components/SystemNoticeBanner";
-import UploadProgressOverlay from "@/components/UploadProgressOverlay";
-import { useSocketConnection, useSocketNotifications } from "@/lib/socket-client";
-import { useCallback } from "react";
-import { useToast } from "@/components/Toast";
-import { sound } from "@/lib/sound";
-
-// 소켓 알림 브릿지 (내부 컴포넌트)
-function SocketBridge() {
-  const connected = useSocketConnection();
-  const { addToast } = useToast();
-
-  const onNotification = useCallback((n: { type: string; message: string }) => {
-    sound.notification();
-    addToast("info", n.message);
-  }, [addToast]);
-
-  useSocketNotifications(onNotification);
-  return null;
-}
-
-export function Providers({ children }: { children: React.ReactNode }) {
-  return (
-    <SessionProvider>
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-        <ToastProvider>
-          <SocketBridge />
-          <SystemNoticeBanner />
-          {children}
-          <UploadProgressOverlay />
-          <MobileBottomNav />
-          <OnboardingTour />
-          <KeyboardShortcuts />
-        </ToastProvider>
-      </ThemeProvider>
-    </SessionProvider>
-  );
-}
-</file>
-
-<file path="package.json">
-{
-  "name": "personal-cloud",  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "dev": "node server.js",
-    "build": "next build",
-    "start": "cross-env NODE_ENV=production tsx server.js",
-    "lint": "next lint",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:push": "prisma db push",
-    "db:studio": "prisma studio",
-    "ai:update": "npx repomix && git add . && git commit -m \"Update code and AI context\" && git push origin master"
-  },
-  "dependencies": {
-    "@prisma/client": "^5.22.0",
-    "archiver": "^7.0.1",
-    "bcryptjs": "^3.0.3",
-    "date-fns": "^4.1.0",
-    "firebase": "^12.9.0",
-    "firebase-admin": "^13.6.1",
-    "lucide-react": "^0.575.0",
-    "next": "14.2.35",
-    "next-auth": "^4.24.10",
-    "next-themes": "^0.4.6",
-    "nodemailer": "^7.0.13",
-    "otpauth": "^9.5.0",
-    "qrcode": "^1.5.4",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "sharp": "^0.33.5",
-    "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3",
-    "tsx": "^4.21.0",
-    "winston": "^3.19.0",
-    "winston-daily-rotate-file": "^5.0.0",
-    "zod": "^3.25.76"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.58.2",
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
-    "@types/archiver": "^7.0.0",
-    "@types/bcrypt": "^5.0.2",
-    "@types/bcryptjs": "^2.4.6",
-    "@types/jest": "^30.0.0",
-    "@types/multer": "^1.4.12",
-    "@types/node": "^20",
-    "@types/nodemailer": "^7.0.9",
-    "@types/qrcode": "^1.5.6",
-    "@types/react": "^18",
-    "@types/react-dom": "^18",
-    "autoprefixer": "^10.4.20",
-    "cross-env": "^10.1.0",
-    "eslint": "^8",
-    "eslint-config-next": "14.2.18",
-    "jest": "^30.2.0",
-    "jest-environment-jsdom": "^30.2.0",
-    "postcss": "^8",
-    "prisma": "^5.22.0",
-    "tailwindcss": "^3.4.1",
-    "ts-jest": "^29.4.6",
-    "typescript": "^5"
-  }
-}
-</file>
-
 <file path="src/app/dashboard/page.tsx">
 "use client";
 
@@ -22188,6 +21929,265 @@ export default function DashboardPage() {
       )}
     </div>
   );
+}
+</file>
+
+<file path="src/app/layout.tsx">
+import type { Metadata } from "next";
+import { Providers } from "./providers";
+import PWAInstaller from "@/components/PWAInstaller";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "이음 (Eum)",
+  description: "사람과 파일을 잇다 - 나만의 퍼스널 클라우드",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "이음",
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
+    "apple-mobile-web-app-capable": "yes",
+    "apple-mobile-web-app-status-bar-style": "black-translucent",
+  },
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="ko" suppressHydrationWarning>
+      <head>
+        <link
+          rel="stylesheet"
+          href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
+        />
+        <link rel="manifest" href="/manifest.json" />
+        <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+        <meta name="theme-color" content="#7c3aed" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+      </head>
+      <body suppressHydrationWarning>
+        <Providers>
+          {children}
+          <PWAInstaller />
+        </Providers>
+      </body>
+    </html>
+  );
+}
+</file>
+
+<file path="src/app/providers.tsx">
+"use client";
+// src/app/providers.tsx — 최종 통합본 (소켓 포함)
+
+import { SessionProvider } from "next-auth/react";
+import { ThemeProvider } from "next-themes";
+import { ToastProvider } from "@/components/Toast";
+import KeyboardShortcuts from "@/components/KeyboardShortcuts";
+import OnboardingTour from "@/components/OnboardingTour";
+import MobileBottomNav from "@/components/MobileBottomNav";
+import SystemNoticeBanner from "@/components/SystemNoticeBanner";
+import UploadProgressOverlay from "@/components/UploadProgressOverlay";
+import { useSocketConnection, useSocketNotifications } from "@/lib/socket-client";
+import { useCallback } from "react";
+import { useToast } from "@/components/Toast";
+import { sound } from "@/lib/sound";
+
+// 소켓 알림 브릿지 (내부 컴포넌트)
+function SocketBridge() {
+  const connected = useSocketConnection();
+  const { addToast } = useToast();
+
+  const onNotification = useCallback((n: { type: string; message: string }) => {
+    sound.notification();
+    addToast("info", n.message);
+  }, [addToast]);
+
+  useSocketNotifications(onNotification);
+  return null;
+}
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  return (
+    <SessionProvider>
+      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <ToastProvider>
+          <SocketBridge />
+          <SystemNoticeBanner />
+          {children}
+          <UploadProgressOverlay />
+          <MobileBottomNav />
+          <OnboardingTour />
+          <KeyboardShortcuts />
+        </ToastProvider>
+      </ThemeProvider>
+    </SessionProvider>
+  );
+}
+</file>
+
+<file path="src/lib/socket-server.ts">
+import { Server as NetServer } from "http";
+import { Server as SocketIOServer } from "socket.io";
+import { prisma } from "@/lib/db";
+
+// 전역 변수로 IO 인스턴스 관리
+let globalIo: SocketIOServer | null = null;
+
+export const initSocketServer = (httpServer: NetServer) => {
+  const io = new SocketIOServer(httpServer, {
+    path: "/api/socket/io",
+    addTrailingSlash: false,
+    cors: { origin: "*", methods: ["GET", "POST"] },
+  });
+
+  globalIo = io;
+
+  io.on("connection", (socket: any) => {
+    const userId = socket.handshake.query.userId;
+    if (!userId) return;
+    
+    socket.join(`user:${userId}`);
+
+    // 통화 요청
+    socket.on("call:initiate", async ({ chatRoomId, receiverId, callType, offer }: any) => {
+      try {
+        const call = await prisma.call.create({
+          data: {
+            chatRoomId,
+            initiatorId: userId,
+            receiverId,
+            type: callType,
+            // ✅ status를 "RINGING" 대신 Prisma Enum 표준인 "PENDING"으로 수정
+            status: "PENDING", 
+          },
+        });
+        
+        io.to(`user:${receiverId}`).emit("call:incoming", {
+          callId: call.id,
+          from: userId,
+          callerName: socket.user?.name || "상대방",
+          callType,
+          offer,
+        });
+      } catch (error) { 
+        console.error("Call creation error:", error); 
+      }
+    });
+
+    socket.on("call:accept", ({ callerId, answer }: any) => {
+      io.to(`user:${callerId}`).emit("call:accepted", { answer });
+    });
+
+    socket.on("call:ice-candidate", ({ otherUserId, candidate }: any) => {
+      io.to(`user:${otherUserId}`).emit("call:ice-candidate", { candidate });
+    });
+
+    socket.on("call:reject", async ({ callerId }: any) => {
+      try {
+        await prisma.call.updateMany({
+          where: { 
+            initiatorId: callerId, 
+            receiverId: userId, 
+            status: "PENDING" // ✅ 여기도 PENDING으로 수정
+          },
+          data: { status: "REJECTED" },
+        });
+        io.to(`user:${callerId}`).emit("call:rejected");
+      } catch (error) {
+        console.error("Call reject error:", error);
+      }
+    });
+
+    socket.on("call:end", ({ otherUserId }: any) => {
+      io.to(`user:${otherUserId}`).emit("call:ended");
+    });
+
+    socket.on("disconnect", () => { 
+      socket.leave(`user:${userId}`); 
+    });
+  });
+
+  return io;
+};
+
+// 알림 전송용 함수
+export const emitToUser = (userId: string, event: string, data: any) => {
+  if (globalIo) {
+    globalIo.to(`user:${userId}`).emit(event, data);
+  } else {
+    console.warn("Socket.io server is not initialized yet.");
+  }
+};
+</file>
+
+<file path="package.json">
+{
+  "name": "personal-cloud",  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js",
+    "build": "next build",
+    "start": "cross-env NODE_ENV=production tsx server.js",
+    "lint": "next lint",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "ai:update": "npx repomix && git add . && git commit -m \"Update code and AI context\" && git push origin master"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "archiver": "^7.0.1",
+    "bcryptjs": "^3.0.3",
+    "date-fns": "^4.1.0",
+    "firebase": "^12.9.0",
+    "firebase-admin": "^13.6.1",
+    "lucide-react": "^0.575.0",
+    "next": "14.2.35",
+    "next-auth": "^4.24.10",
+    "next-themes": "^0.4.6",
+    "nodemailer": "^7.0.13",
+    "otpauth": "^9.5.0",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sharp": "^0.33.5",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "tsx": "^4.21.0",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/archiver": "^7.0.0",
+    "@types/bcrypt": "^5.0.2",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jest": "^30.0.0",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^20",
+    "@types/nodemailer": "^7.0.9",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "autoprefixer": "^10.4.20",
+    "cross-env": "^10.1.0",
+    "eslint": "^8",
+    "eslint-config-next": "14.2.18",
+    "jest": "^30.2.0",
+    "jest-environment-jsdom": "^30.2.0",
+    "postcss": "^8",
+    "prisma": "^5.22.0",
+    "tailwindcss": "^3.4.1",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5"
+  }
 }
 </file>
 

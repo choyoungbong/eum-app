@@ -2,7 +2,8 @@
 // 전체 완성본 — 기존 파일을 이것으로 교체하세요
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {

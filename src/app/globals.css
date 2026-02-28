@@ -1,31 +1,75 @@
-/* - 모바일 UI/UX 대응 */
+/* src/app/globals.css */
+/* ✅ 핵심: @tailwind 디렉티브 추가 - 이게 없으면 Tailwind CSS가 전혀 적용 안 됨 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Safe Area (노치/홈바 대응) ─────────────────────────── */
 :root {
   --sat: env(safe-area-inset-top);
   --sab: env(safe-area-inset-bottom);
 }
 
-html, body {
-  /* 키보드 대응을 위한 높이 설정 */
+/* ── 기본 레이아웃 ──────────────────────────────────────── */
+html {
   height: -webkit-fill-available;
-  overflow: hidden; /* 바디 스크롤 방지, 내부 스크롤 사용 */
 }
 
+body {
+  font-family: "Pretendard", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── 다크모드 기본 배경 ────────────────────────────────── */
+@layer base {
+  html.dark body {
+    background-color: #09090b;
+    color: #fafafa;
+  }
+}
+
+/* ── 스크롤바 스타일 ────────────────────────────────────── */
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.15);
+    border-radius: 9999px;
+  }
+  .dark .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.15);
+  }
+}
+
+/* ── Safe Area 유틸리티 ─────────────────────────────────── */
 .safe-area-bottom {
   padding-bottom: var(--sab);
 }
+.safe-area-top {
+  padding-top: var(--sat);
+}
 
-/* 메시지 리스트 영역: 입력창 높이를 제외한 가변 높이 */
+/* ── 채팅 전용 ──────────────────────────────────────────── */
 .chat-messages-container {
   height: calc(100vh - 80px - var(--sat) - var(--sab));
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
 
-/* 모바일 입력창 하단 고정 */
 .chat-input-wrapper {
   position: sticky;
   bottom: 0;
   padding-bottom: max(1rem, var(--sab));
   background: white;
   z-index: 50;
+}
+
+.dark .chat-input-wrapper {
+  background: #18181b;
 }

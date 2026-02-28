@@ -1,5 +1,4 @@
 // src/lib/emit-notification.ts
-import * as socketServer from "@/lib/socket-server";
 import { prisma } from "@/lib/db";
 
 type NotificationType = "COMMENT" | "SHARE" | "CHAT" | "SYSTEM" | "FILE_UPLOAD" | "CALL";
@@ -21,32 +20,26 @@ export async function emitNotification(
     const notification = await prisma.notification.create({
       data: {
         userId,
-        title: params.title,
-        message: params.message,
-        type: params.type,
-        link: params.link,
+        title:    params.title,
+        message:  params.message,
+        type:     params.type,
+        link:     params.link,
         metadata: params.metadata || {},
-        isRead: false,
+        isRead:   false,   // ✅ 수정: read → isRead (스키마 필드명)
       },
     });
 
-    // 2. 실시간 소켓 전송 (안전한 방식)
-    // socket-server에 emitToUser가 명시적으로 export 되지 않았을 경우를 대비해 any로 처리
-    const server = socketServer as any;
-    
-    if (server && typeof server.emitToUser === "function") {
-      server.emitToUser(userId, "notification", notification);
-    } else if (server && server.io) {
-      // 만약 io 객체가 직접 노출되어 있다면 해당 방식으로 전송
-      server.io.to(userId).emit("notification", notification);
+    // 2. 실시간 소켓 전송
+    const io = (global as any).io;
+    if (io) {
+      io.to(`user:${userId}`).emit("notification:new", notification);
     } else {
-      console.warn(`[Notification] Socket not connected for user ${userId}, but saved to DB.`);
+      console.warn(`[Notification] global.io 없음 — userId=${userId} DB만 저장`);
     }
 
     return notification;
   } catch (error) {
-    console.error("Emit notification error:", error);
-    // 빌드 중단 방지를 위해 에러를 던지지 않고 로그만 남깁니다.
+    console.error("emitNotification error:", error);
     return null;
   }
 }

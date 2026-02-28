@@ -8,7 +8,7 @@ RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 # ── 스테이지 2: 빌드 ──────────────────────────
 FROM node:20-alpine AS builder

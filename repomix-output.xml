@@ -121,6 +121,7 @@ src/app/api/saved-searches/route.ts
 src/app/api/search/route.ts
 src/app/api/share/[token]/route.ts
 src/app/api/share/route.ts
+src/app/api/socket/io/route.ts
 src/app/api/tags/route.ts
 src/app/api/users/[id]/follow/route.ts
 src/app/api/users/[id]/followers/route.ts
@@ -4225,6 +4226,37 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+</file>
+
+<file path="src/app/api/socket/io/route.ts">
+import { NextRequest } from "next/server";
+import { Server as NetServer } from "http";
+import { Server as SocketIOServer } from "socket.io";
+import { initSocketServer } from "@/lib/socket-server";
+
+export const dynamic = "force-dynamic";
+
+let io: SocketIOServer;
+
+export async function GET(req: NextRequest) {
+  const res: any = req;
+  const httpServer: NetServer & { io?: SocketIOServer } = res.socket?.server;
+
+  if (!httpServer) {
+    return new Response("No HTTP server", { status: 500 });
+  }
+
+  // ✅ 타입 확장된 방식으로 체크
+  if (!httpServer.io) {
+    io = initSocketServer(httpServer);
+    httpServer.io = io;
+    console.log("✅ Socket.io 서버 초기화 완료");
+  } else {
+    console.log("⚠️ Socket.io 이미 실행 중");
+  }
+
+  return new Response("Socket.io server running");
 }
 </file>
 
@@ -21234,34 +21266,42 @@ export function useToast() {
 import { useEffect, useState, useCallback, useRef } from "react";
 import { io, Socket } from "socket.io-client";
 import { toast } from "@/components/Toast";
+import { useSession } from "next-auth/react";
 
 export const useSocket = (chatRoomId?: string) => {
+  const { data: session } = useSession();
+
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [isConnected, setIsConnected] = useState(false); // ✅ 추가: 연결 상태 확인용
+  const [isConnected, setIsConnected] = useState(false);
   const [socketMessages, setSocketMessages] = useState<any[]>([]);
-  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
-  
-  const [callStatus, setCallStatus] = useState<"idle" | "calling" | "incoming" | "connected">("idle");
+
+  const [callStatus, setCallStatus] = useState<
+    "idle" | "calling" | "incoming" | "connected"
+  >("idle");
+
   const [incomingCall, setIncomingCall] = useState<any>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  
+
   const peerConnection = useRef<RTCPeerConnection | null>(null);
 
   useEffect(() => {
-    const s = io(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000", {
+    if (!session?.user?.id) return;
+
+    const s = io({
       path: "/api/socket/io",
+      query: { userId: session.user.id },
     });
 
     s.on("connect", () => {
-      setIsConnected(true); // ✅ 연결됨
+      setIsConnected(true);
       if (chatRoomId) {
         s.emit("room:join", { chatRoomId });
       }
     });
 
     s.on("disconnect", () => {
-      setIsConnected(false); // ✅ 연결 끊김
+      setIsConnected(false);
     });
 
     s.on("message:received", (msg) => {
@@ -21275,14 +21315,18 @@ export const useSocket = (chatRoomId?: string) => {
 
     s.on("call:accepted", async ({ answer }) => {
       if (peerConnection.current) {
-        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(answer));
+        await peerConnection.current.setRemoteDescription(
+          new RTCSessionDescription(answer)
+        );
         setCallStatus("connected");
       }
     });
 
     s.on("call:ice-candidate", async ({ candidate }) => {
       if (peerConnection.current) {
-        await peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
+        await peerConnection.current.addIceCandidate(
+          new RTCIceCandidate(candidate)
+        );
       }
     });
 
@@ -21297,11 +21341,14 @@ export const useSocket = (chatRoomId?: string) => {
     });
 
     setSocket(s);
-    return () => { s.disconnect(); };
-  }, [chatRoomId]);
+
+    return () => {
+      s.disconnect();
+    };
+  }, [chatRoomId, session?.user?.id]);
 
   const resetCallState = useCallback(() => {
-    if (localStream) localStream.getTracks().forEach(t => t.stop());
+    if (localStream) localStream.getTracks().forEach((t) => t.stop());
     setLocalStream(null);
     setRemoteStream(null);
     setCallStatus("idle");
@@ -21312,90 +21359,61 @@ export const useSocket = (chatRoomId?: string) => {
     }
   }, [localStream]);
 
-  const initiateCall = useCallback(async (type: "VOICE" | "VIDEO", otherUserId: string) => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === "VIDEO" });
-      setLocalStream(stream);
-      setCallStatus("calling");
+  const initiateCall = useCallback(
+    async (type: "VOICE" | "VIDEO", otherUserId: string) => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: type === "VIDEO",
+        });
 
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+        setLocalStream(stream);
+        setCallStatus("calling");
 
-      pc.onicecandidate = (e) => {
-        if (e.candidate) socket?.emit("call:ice-candidate", { otherUserId, candidate: e.candidate });
-      };
-      pc.ontrack = (e) => setRemoteStream(e.streams[0]);
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        });
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      peerConnection.current = pc;
+        stream.getTracks().forEach((track) =>
+          pc.addTrack(track, stream)
+        );
 
-      socket?.emit("call:initiate", { chatRoomId, receiverId: otherUserId, callType: type, offer });
-    } catch (err) {
-      toast.error("미디어 장치 접근 실패");
-    }
-  }, [socket, chatRoomId]);
+        pc.onicecandidate = (e) => {
+          if (e.candidate)
+            socket?.emit("call:ice-candidate", {
+              otherUserId,
+              candidate: e.candidate,
+            });
+        };
 
-  const acceptCall = useCallback(async () => {
-    if (!incomingCall || !socket) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: incomingCall.callType === "VIDEO" });
-      setLocalStream(stream);
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+        pc.ontrack = (e) => setRemoteStream(e.streams[0]);
 
-      pc.onicecandidate = (e) => {
-        if (e.candidate) socket.emit("call:ice-candidate", { otherUserId: incomingCall.from, candidate: e.candidate });
-      };
-      pc.ontrack = (e) => setRemoteStream(e.streams[0]);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        peerConnection.current = pc;
 
-      await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      peerConnection.current = pc;
+        socket?.emit("call:initiate", {
+          chatRoomId,
+          receiverId: otherUserId,
+          callType: type,
+          offer,
+        });
+      } catch (err) {
+        toast.error("미디어 장치 접근 실패");
+      }
+    },
+    [socket, chatRoomId]
+  );
 
-      socket.emit("call:accept", { callerId: incomingCall.from, answer });
-      setCallStatus("connected");
-    } catch (err) {
-      toast.error("통화 연결 실패");
-    }
-  }, [incomingCall, socket]);
-
-  const rejectCall = useCallback(() => {
-    if (incomingCall && socket) {
-      socket.emit("call:reject", { callerId: incomingCall.from });
-      resetCallState();
-    }
-  }, [incomingCall, socket, resetCallState]);
-
-  const endCall = useCallback((otherUserId?: string) => {
-    if (socket && otherUserId) socket.emit("call:end", { otherUserId });
-    resetCallState();
-  }, [socket, resetCallState]);
-
-  const toggleMute = () => {
-    if (localStream) {
-      const track = localStream.getAudioTracks()[0];
-      track.enabled = !track.enabled;
-      return !track.enabled; 
-    }
-    return false;
-  };
-
-  return { 
-    socketMessages, 
-    typingUsers, 
-    socket, 
-    isConnected, // ✅ 추가: 이제 page.tsx에서 이 값을 사용할 수 있습니다.
-    incomingCall, 
-    localStream, 
-    remoteStream, 
-    callStatus, 
-    initiateCall, 
-    acceptCall, 
-    rejectCall, 
-    endCall, 
-    toggleMute 
+  return {
+    socketMessages,
+    socket,
+    isConnected,
+    incomingCall,
+    localStream,
+    remoteStream,
+    callStatus,
+    initiateCall,
   };
 };
 </file>
@@ -22367,7 +22385,7 @@ export const emitToUser = (userId: string, event: string, data: any) => {
 import { useSession } from "next-auth/react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useRef, useCallback } from "react";
-import { useSocket } from "@/hooks/useSocket"; // useChatRoom -> useSocket으로 복구
+import { useSocket } from "@/hooks/useSocket";
 import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { toast } from "@/components/Toast";
 
@@ -22383,164 +22401,110 @@ export default function ChatRoomPage() {
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [chatRoom, setChatRoom] = useState<any>(null);
-  const [audioMuted, setAudioMuted] = useState(false);
-
-  const [hasMore, setHasMore] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const oldestMessageDateRef = useRef<string | null>(null);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const shouldScrollToBottomRef = useRef(true);
 
-  const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
-
-  // useSocket 사용
   const {
     socketMessages,
     socket,
-    incomingCall,
-    localStream,
-    remoteStream,
-    callStatus,
-    initiateCall,
-    acceptCall,
-    rejectCall,
-    endCall,
-    toggleMute,
+    isConnected,
   } = useSocket(chatRoomId);
 
+  /* ------------------ 초기 로딩 ------------------ */
   useEffect(() => {
     if (!chatRoomId) return;
-    Promise.all([
-      fetch(`/api/chat/rooms/${chatRoomId}/messages?limit=${MESSAGE_LIMIT}`),
-      fetch(`/api/chat/rooms/${chatRoomId}`),
-    ]).then(async ([msgRes, roomRes]) => {
-      if (msgRes.ok) {
-        const data = await msgRes.json();
-        const messages = data.messages || [];
-        setAllMessages(messages);
-        if (messages.length > 0) oldestMessageDateRef.current = messages[0].createdAt;
-        setHasMore(messages.length === MESSAGE_LIMIT);
-      }
-      if (roomRes.ok) {
-        const data = await roomRes.json();
-        setChatRoom(data.chatRoom);
-      }
-    }).finally(() => setIsInitialLoading(false));
+
+    fetch(`/api/chat/rooms/${chatRoomId}`)
+      .then((res) => res.json())
+      .then((data) => setChatRoom(data.chatRoom));
   }, [chatRoomId]);
 
-  const fetchMoreMessages = useCallback(async () => {
-    if (!oldestMessageDateRef.current || isLoadingMore) return;
-    setIsLoadingMore(true);
-    const container = scrollContainerRef.current;
-    const prevScrollHeight = container?.scrollHeight || 0;
-    try {
-      const res = await fetch(`/api/chat/rooms/${chatRoomId}/messages?limit=${MESSAGE_LIMIT}&before=${encodeURIComponent(oldestMessageDateRef.current)}`);
-      if (res.ok) {
-        const data = await res.json();
-        const older = data.messages || [];
-        if (older.length === 0) { setHasMore(false); return; }
-        setAllMessages((prev) => [...older, ...prev]);
-        setHasMore(older.length === MESSAGE_LIMIT);
-        oldestMessageDateRef.current = older[0].createdAt;
-        requestAnimationFrame(() => { if (container) container.scrollTop = container.scrollHeight - prevScrollHeight; });
-      }
-    } finally { setIsLoadingMore(false); }
-  }, [chatRoomId, isLoadingMore]);
-
-  const { setSentinel: topObserverRef } = useInfiniteScroll({
-    fetcher: async (page) => {
-      if (page > 1) await fetchMoreMessages();
-      return { items: [], hasMore };
-    },
-    deps: [chatRoomId],
-  });
-
+  /* ------------------ 소켓 메시지 ------------------ */
   useEffect(() => {
     if (socketMessages.length === 0) return;
     const newMsg = socketMessages[socketMessages.length - 1];
-    setAllMessages((prev) => prev.some((m) => m.id === newMsg.id) ? prev : [...prev, newMsg]);
-    shouldScrollToBottomRef.current = true;
+    setAllMessages((prev) =>
+      prev.some((m) => m.id === newMsg.id) ? prev : [...prev, newMsg]
+    );
   }, [socketMessages]);
 
+  /* ------------------ 스크롤 하단 유지 ------------------ */
   useEffect(() => {
-    if (shouldScrollToBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-      shouldScrollToBottomRef.current = false;
-    }
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [allMessages]);
 
-  useEffect(() => {
-    if (localStream && localVideoRef.current) localVideoRef.current.srcObject = localStream;
-  }, [localStream]);
-
-  useEffect(() => {
-    if (remoteStream && remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.play().catch(console.warn);
-    }
-  }, [remoteStream]);
-
+  /* ------------------ 메시지 전송 ------------------ */
   const onSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isSending) return;
+
     const content = input;
     setInput("");
     setIsSending(true);
+
     try {
       const res = await fetch(`/api/chat/rooms/${chatRoomId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "TEXT", content }),
       });
+
       const result = await res.json();
+
       if (result.data) {
         setAllMessages((prev) => [...prev, result.data]);
         socket?.emit("message:send", { chatRoomId, ...result.data });
       }
-    } finally { setIsSending(false); }
+    } catch {
+      toast.error("메시지 전송 실패");
+    } finally {
+      setIsSending(false);
+    }
   };
 
-  const getOtherMember = () => chatRoom?.members?.find((m: any) => m.user.id !== session?.user?.id);
-
-  const callStatusLabel: Record<string, string> = {
-    calling: "연결 중...",
-    incoming: "통화 수신 중",
-    connected: "통화 중",
-  };
+  /* ------------------ UI ------------------ */
 
   return (
-    <div className="flex flex-col h-screen bg-[#F8F9FA] text-black overflow-hidden">
-      <div className="p-4 border-b flex justify-between items-center bg-white sticky top-0 z-20 shadow-sm">
-        <div className="flex items-center gap-3">
-          <button onClick={() => router.back()} className="p-1 rounded-full hover:bg-gray-100">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6"/></svg>
-          </button>
-          <div>
-            <p className="font-bold">{getOtherMember()?.user?.name || "대화방"}</p>
-            {callStatus !== "idle" && <p className="text-xs text-green-500 animate-pulse">{callStatusLabel[callStatus]}</p>}
-          </div>
+    <div className="flex flex-col h-[100dvh] bg-gray-50">
+
+      {/* 헤더 */}
+      <div className="p-4 border-b bg-white flex justify-between items-center sticky top-0 z-20">
+        <button onClick={() => router.back()}>←</button>
+        <div className="flex items-center gap-2">
+          <span className="font-bold">
+            {chatRoom?.name || "대화방"}
+          </span>
+          <span
+            className={`w-2 h-2 rounded-full ${
+              isConnected ? "bg-green-500" : "bg-gray-300"
+            }`}
+          />
         </div>
-        {callStatus === "idle" && (
-          <div className="flex gap-2">
-            <button onClick={() => initiateCall("VOICE", getOtherMember()?.user.id)} className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white">📞</button>
-            <button onClick={() => initiateCall("VIDEO", getOtherMember()?.user.id)} className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white">📹</button>
-          </div>
-        )}
+        <div />
       </div>
 
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-2 pb-28">
-        <div ref={topObserverRef} className="h-1" />
-        <div className="space-y-4 mt-2">
+      {/* 메시지 영역 */}
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto px-4 py-4"
+      >
+        <div className="space-y-4">
           {allMessages.map((msg, idx) => {
             const isMe = msg.senderId === session?.user?.id;
             return (
-              <div key={idx} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
-                <div className={`p-3 px-4 rounded-2xl max-w-[70%] text-sm shadow-sm ${isMe ? "bg-blue-600 text-white rounded-tr-none" : "bg-white border text-black rounded-tl-none"}`}>
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
+              <div
+                key={idx}
+                className={`flex ${isMe ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`p-3 px-4 rounded-2xl max-w-[70%] text-sm shadow ${
+                    isMe
+                      ? "bg-blue-600 text-white"
+                      : "bg-white border"
+                  }`}
+                >
+                  {msg.content}
                 </div>
               </div>
             );
@@ -22549,48 +22513,515 @@ export default function ChatRoomPage() {
         <div ref={bottomRef} />
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 p-3 bg-white border-t z-30">
-        <form onSubmit={onSend} className="flex items-center gap-2 max-w-2xl mx-auto">
-          <input value={input} onChange={(e) => setInput(e.target.value)} className="flex-1 border rounded-full px-5 py-3 bg-gray-100 outline-none focus:bg-white" placeholder="메시지 입력..." />
-          <button type="submit" disabled={!input.trim() || isSending} className="bg-blue-600 text-white w-12 h-12 flex items-center justify-center rounded-full shadow-lg disabled:bg-gray-300">
-             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+      {/* 입력창 */}
+      <div className="bg-white border-t p-3">
+        <form
+          onSubmit={onSend}
+          className="flex items-center gap-2 max-w-2xl mx-auto"
+        >
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            className="flex-1 border rounded-full px-5 py-3 bg-gray-100 outline-none"
+            placeholder="메시지 입력..."
+          />
+          <button
+            type="submit"
+            disabled={!input.trim() || isSending}
+            className="bg-blue-600 text-white w-12 h-12 rounded-full"
+          >
+            ➤
           </button>
         </form>
       </div>
+    </div>
+  );
+}
+</file>
 
-      {callStatus !== "idle" && (
-        <div className="fixed inset-0 z-[100] bg-black/95 flex flex-col items-center justify-center p-6 backdrop-blur-md text-white">
-          <div className="text-center mb-8">
-            <h2 className="text-2xl font-bold">{getOtherMember()?.user?.name}</h2>
-            <p className="text-white/50">{callStatusLabel[callStatus]}</p>
-          </div>
-          {callStatus === "connected" && (
-            <div className="relative w-full max-w-sm aspect-[3/4] bg-gray-900 rounded-[2rem] overflow-hidden mb-8 border border-white/10">
-              <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
-              <div className="absolute top-4 right-4 w-24 aspect-[3/4] bg-black rounded-xl overflow-hidden border-2 border-white/20">
-                <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-              </div>
-            </div>
-          )}
-          <div className="flex gap-6 items-center">
-            {callStatus === "incoming" ? (
-              <>
-                <button onClick={rejectCall} className="w-16 h-16 bg-red-500 rounded-full text-2xl">✕</button>
-                <button onClick={acceptCall} className="w-16 h-16 bg-green-500 rounded-full text-2xl">✓</button>
-              </>
-            ) : (
-              <>
-                <button onClick={() => setAudioMuted(toggleMute())} className={`w-14 h-14 rounded-full flex items-center justify-center ${audioMuted ? "bg-red-500" : "bg-white/20"}`}>
-                  {audioMuted ? "🔇" : "🎤"}
-                </button>
-                <button onClick={() => endCall(getOtherMember()?.user.id)} className="w-20 h-20 bg-red-500 rounded-full flex items-center justify-center rotate-[135deg]">
-                  📞
-                </button>
-              </>
-            )}
+<file path="src/app/profile/page.tsx">
+"use client";
+export const dynamic = 'force-dynamic';
+// src/app/profile/page.tsx
+// ✅ 수정: useSearchParams 제거(미사용), Suspense 불필요하게 됨
+
+import { useSession, signOut } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import ThemeToggle from "@/components/ThemeToggle";
+import { toast } from "@/components/Toast";
+import { useConfirm } from "@/components/ConfirmDialog";
+import { formatFileSize, storagePercent } from "@/lib/client-utils";
+
+interface UserStats {
+  totalFiles: number;
+  totalPosts: number;
+  totalComments: number;
+  storageUsedBytes: number;
+  storageUsedMB: string;
+}
+
+interface UserInfo {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  emailVerified: boolean;
+  createdAt: string;
+  isOnline: boolean;
+}
+
+export default function ProfilePage() {
+  const { data: session, status, update: updateSession } = useSession();
+  const router = useRouter();
+  const { confirmDialog, openConfirm } = useConfirm();
+
+  const [user, setUser] = useState<UserInfo | null>(null);
+  const [stats, setStats] = useState<UserStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [sendingVerification, setSendingVerification] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
+  const [showDeleteSection, setShowDeleteSection] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // 이름 변경 폼
+  const [nameEdit, setNameEdit] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [nameLoading, setNameLoading] = useState(false);
+
+  // 비밀번호 변경 폼
+  const [pwEdit, setPwEdit] = useState(false);
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [pwLoading, setPwLoading] = useState(false);
+
+  useEffect(() => {
+    if (status === "unauthenticated") router.push("/login");
+  }, [status, router]);
+
+  useEffect(() => {
+    if (session) fetchProfile();
+  }, [session]);
+
+  const fetchProfile = async () => {
+    try {
+      const res = await fetch("/api/users/me");
+      if (res.ok) {
+        const data = await res.json();
+        setUser(data.user);
+        setStats(data.stats);
+        setNewName(data.user.name);
+      }
+    } catch {
+      toast.error("프로필 로드에 실패했습니다");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleNameSave = async () => {
+    if (!newName.trim() || newName.trim() === user?.name) {
+      setNameEdit(false);
+      return;
+    }
+    setNameLoading(true);
+    try {
+      const res = await fetch("/api/users/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUser((prev) => prev ? { ...prev, name: data.user.name } : prev);
+        await updateSession({ name: data.user.name });
+        toast.success("이름이 변경되었습니다");
+        setNameEdit(false);
+      } else {
+        toast.error(data.error || "이름 변경에 실패했습니다");
+      }
+    } catch {
+      toast.error("오류가 발생했습니다");
+    } finally {
+      setNameLoading(false);
+    }
+  };
+
+  const handlePasswordSave = async () => {
+    if (!currentPw || !newPw || !confirmPw) {
+      toast.warning("모든 필드를 입력해주세요");
+      return;
+    }
+    if (newPw !== confirmPw) {
+      toast.warning("새 비밀번호가 일치하지 않습니다");
+      return;
+    }
+    if (newPw.length < 8) {
+      toast.warning("새 비밀번호는 8자 이상이어야 합니다");
+      return;
+    }
+    setPwLoading(true);
+    try {
+      const res = await fetch("/api/users/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: currentPw, newPassword: newPw }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success("비밀번호가 변경되었습니다");
+        setPwEdit(false);
+        setCurrentPw(""); setNewPw(""); setConfirmPw("");
+      } else {
+        toast.error(data.error || "비밀번호 변경에 실패했습니다");
+      }
+    } catch {
+      toast.error("오류가 발생했습니다");
+    } finally {
+      setPwLoading(false);
+    }
+  };
+
+  const sendVerificationEmail = async () => {
+    setSendingVerification(true);
+    try {
+      const res = await fetch("/api/auth/verify-email", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setVerificationSent(true);
+      toast.success("인증 이메일을 발송했습니다. 받은편지함을 확인해주세요.");
+    } catch (e: any) {
+      toast.error(e.message || "이메일 발송에 실패했습니다");
+    } finally {
+      setSendingVerification(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmText !== "계정삭제") return;
+    setIsDeleting(true);
+    try {
+      const res = await fetch("/api/users/me", { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      await signOut({ callbackUrl: "/" });
+    } catch {
+      toast.error("계정 삭제에 실패했습니다. 다시 시도해주세요.");
+      setIsDeleting(false);
+    }
+  };
+
+  const handleLogout = () => {
+    openConfirm({
+      title: "로그아웃",
+      message: "로그아웃 하시겠습니까?",
+      confirmLabel: "로그아웃",
+      onConfirm: () => signOut({ callbackUrl: "/login" }),
+    });
+  };
+
+  if (status === "loading" || loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-slate-900">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+      </div>
+    );
+  }
+
+  if (!session || !user) return null;
+
+  const usagePercent = stats ? storagePercent(stats.storageUsedBytes) : 0;
+  const storageColor =
+    usagePercent > 90 ? "bg-red-500" : usagePercent > 70 ? "bg-yellow-500" : "bg-blue-500";
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-900">
+      {confirmDialog}
+
+      {/* 헤더 */}
+      <header className="bg-white dark:bg-slate-800 shadow dark:shadow-slate-700/30 sticky top-0 z-10 border-b border-gray-100 dark:border-slate-700">
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
+          <Link href="/dashboard" className="text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 flex items-center gap-2 text-sm">
+            ← 대시보드
+          </Link>
+          <h1 className="text-lg font-bold text-gray-900 dark:text-slate-100">마이페이지</h1>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <button
+              onClick={handleLogout}
+              className="text-sm text-red-500 hover:text-red-700 font-medium"
+            >
+              로그아웃
+            </button>
           </div>
         </div>
-      )}
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+
+        {/* 프로필 카드 */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
+          <div className="flex items-center gap-4 mb-6">
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-2xl font-bold flex-shrink-0">
+              {user.name.charAt(0).toUpperCase()}
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-slate-100">{user.name}</h2>
+              <p className="text-gray-500 dark:text-slate-400 text-sm">{user.email}</p>
+              <span className={`inline-block mt-1 px-2 py-0.5 text-xs rounded-full font-medium ${
+                user.role === "ADMIN"
+                  ? "bg-purple-100 text-purple-700"
+                  : "bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-400"
+              }`}>
+                {user.role === "ADMIN" ? "관리자" : "일반 사용자"}
+              </span>
+            </div>
+          </div>
+
+          {stats && (
+            <div className="grid grid-cols-3 gap-4 pt-4 border-t">
+              {[
+                { label: "파일", value: stats.totalFiles.toLocaleString() },
+                { label: "게시글", value: stats.totalPosts.toLocaleString() },
+                { label: "댓글", value: stats.totalComments.toLocaleString() },
+              ].map(({ label, value }) => (
+                <div key={label} className="text-center">
+                  <p className="text-xl font-bold text-gray-900 dark:text-slate-100">{value}</p>
+                  <p className="text-xs text-gray-500 dark:text-slate-400">{label}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 스토리지 */}
+        {stats && (
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-3">☁️ 스토리지 사용량</h3>
+            <div className="flex justify-between text-sm text-gray-600 dark:text-slate-400 mb-2">
+              <span>{formatFileSize(stats.storageUsedBytes)} 사용 중</span>
+              <span className="text-gray-400 dark:text-slate-500">/ 5 GB</span>
+            </div>
+            <div className="w-full bg-gray-100 dark:bg-slate-700 rounded-full h-2.5">
+              <div
+                className={`h-2.5 rounded-full transition-all ${storageColor}`}
+                style={{ width: `${usagePercent}%` }}
+              />
+            </div>
+            <p className="text-xs text-gray-400 dark:text-slate-500 mt-1.5">{usagePercent.toFixed(1)}% 사용</p>
+          </div>
+        )}
+
+        {/* 이름 변경 */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300">✏️ 이름 변경</h3>
+            {!nameEdit && (
+              <button
+                onClick={() => { setNameEdit(true); setNewName(user.name); }}
+                className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+              >
+                변경
+              </button>
+            )}
+          </div>
+          {nameEdit ? (
+            <div className="space-y-3">
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                maxLength={20}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
+                placeholder="새 이름 입력"
+                autoFocus
+                onKeyDown={(e) => e.key === "Enter" && handleNameSave()}
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => { setNameEdit(false); setNewName(user.name); }}
+                  className="px-4 py-1.5 text-sm text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg"
+                >취소</button>
+                <button
+                  onClick={handleNameSave}
+                  disabled={nameLoading || !newName.trim()}
+                  className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {nameLoading ? "저장 중..." : "저장"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-gray-900 dark:text-slate-100 font-medium">{user.name}</p>
+          )}
+        </div>
+
+        {/* 비밀번호 변경 */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300">🔒 비밀번호 변경</h3>
+            {!pwEdit && (
+              <button onClick={() => setPwEdit(true)} className="text-xs text-blue-600 hover:text-blue-800 font-medium">
+                변경
+              </button>
+            )}
+          </div>
+          {pwEdit ? (
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">현재 비밀번호</label>
+                <input type="password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
+                  placeholder="현재 비밀번호" autoFocus />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">새 비밀번호</label>
+                <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
+                  placeholder="새 비밀번호 (최소 8자)" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">새 비밀번호 확인</label>
+                <input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm ${
+                    confirmPw && newPw !== confirmPw ? "border-red-400" : "border-gray-300"
+                  }`}
+                  placeholder="새 비밀번호 재입력" />
+                {confirmPw && newPw !== confirmPw && (
+                  <p className="text-xs text-red-500 mt-1">비밀번호가 일치하지 않습니다</p>
+                )}
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => { setPwEdit(false); setCurrentPw(""); setNewPw(""); setConfirmPw(""); }}
+                  className="px-4 py-1.5 text-sm text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg"
+                >취소</button>
+                <button onClick={handlePasswordSave} disabled={pwLoading}
+                  className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                  {pwLoading ? "변경 중..." : "변경하기"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-gray-400 dark:text-slate-500 text-sm">••••••••</p>
+          )}
+        </div>
+
+        {/* 계정 정보 */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-4">📋 계정 정보</h3>
+          <dl className="space-y-3 text-sm">
+            <div className="flex justify-between">
+              <dt className="text-gray-500 dark:text-slate-400">이메일</dt>
+              <dd className="font-medium text-gray-900 dark:text-slate-100">{user.email}</dd>
+            </div>
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between">
+                <dt className="text-gray-500 dark:text-slate-400">이메일 인증</dt>
+                <dd className="font-medium text-gray-900 dark:text-slate-100">
+                  {user.emailVerified ? "✅ 인증 완료" : "⚠️ 미인증"}
+                </dd>
+              </div>
+              {!user.emailVerified && (
+                <button
+                  onClick={sendVerificationEmail}
+                  disabled={sendingVerification || verificationSent}
+                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50 text-right"
+                >
+                  {verificationSent ? "발송됨 ✓" : sendingVerification ? "발송 중..." : "인증 이메일 재발송"}
+                </button>
+              )}
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-gray-500 dark:text-slate-400">가입일</dt>
+              <dd className="font-medium text-gray-900 dark:text-slate-100">
+                {new Date(user.createdAt).toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" })}
+              </dd>
+            </div>
+          </dl>
+        </div>
+
+        {/* 바로가기 */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-3">🔗 바로가기</h3>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { href: "/dashboard", label: "📁 파일 관리", color: "bg-blue-50 text-blue-700 hover:bg-blue-100" },
+              { href: "/posts", label: "📝 게시글", color: "bg-green-50 text-green-700 hover:bg-green-100" },
+              { href: "/chat", label: "💬 채팅", color: "bg-purple-50 text-purple-700 hover:bg-purple-100" },
+              { href: "/search", label: "🔍 검색", color: "bg-orange-50 text-orange-700 hover:bg-orange-100" },
+              { href: "/notifications", label: "🔔 알림", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
+              { href: "/settings/sessions", label: "💻 로그인 기기", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
+              { href: "/trash", label: "🗑️ 휴지통", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
+              { href: "/users/search", label: "👥 사용자 검색", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
+              { href: "/settings/2fa", label: "🔐 2단계 인증", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
+              ...(user.role === "ADMIN"
+                ? [{ href: "/admin", label: "🛡️ 관리자", color: "bg-red-50 text-red-700 hover:bg-red-100" }]
+                : []),
+            ].map(({ href, label, color }) => (
+              <Link key={href} href={href}
+                className={`flex items-center justify-center py-3 px-4 rounded-lg text-sm font-medium transition ${color}`}>
+                {label}
+              </Link>
+            ))}
+          </div>
+        </div>
+
+        {/* 데이터 내보내기 */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-100 dark:border-slate-700 p-5">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-3">📦 내 데이터</h3>
+          <p className="text-xs text-gray-500 dark:text-slate-400 mb-3">
+            파일 목록, 게시글, 댓글, 활동 내역 등 내 모든 데이터를 JSON 파일로 내려받을 수 있습니다.
+          </p>
+          <a href="/api/users/me/export" download
+            className="flex items-center justify-center gap-2 w-full py-2.5 text-sm font-medium text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded-xl border border-blue-200 dark:border-blue-800 transition">
+            ⬇️ 데이터 내보내기 (JSON)
+          </a>
+        </div>
+
+        {/* 로그아웃 */}
+        <div>
+          <button onClick={handleLogout}
+            className="w-full py-3 text-sm font-medium text-red-600 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-xl border border-red-200 dark:border-red-800 transition">
+            로그아웃
+          </button>
+        </div>
+
+        {/* 계정 삭제 */}
+        <div className="pb-8">
+          <button
+            onClick={() => setShowDeleteSection(!showDeleteSection)}
+            className="w-full py-2 text-xs text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition">
+            {showDeleteSection ? "▲ 접기" : "계정 삭제..."}
+          </button>
+          {showDeleteSection && (
+            <div className="mt-3 p-4 rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 space-y-3">
+              <p className="text-sm font-semibold text-red-700 dark:text-red-400">⚠️ 계정 영구 삭제</p>
+              <p className="text-xs text-red-600 dark:text-red-400">
+                계정을 삭제하면 모든 파일, 게시글, 댓글, 채팅 내역이 <strong>영구적으로 삭제</strong>되며 복구할 수 없습니다.
+              </p>
+              <p className="text-xs text-gray-600 dark:text-slate-400">
+                확인을 위해 아래에 <strong className="text-red-600">&quot;계정삭제&quot;</strong> 를 입력하세요.
+              </p>
+              <input
+                type="text"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                placeholder="계정삭제"
+                className="w-full border border-red-300 dark:border-red-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white dark:bg-slate-800 dark:text-slate-100"
+              />
+              <button
+                onClick={handleDeleteAccount}
+                disabled={deleteConfirmText !== "계정삭제" || isDeleting}
+                className="w-full py-2.5 text-sm font-bold text-white bg-red-500 hover:bg-red-600 disabled:bg-gray-300 dark:disabled:bg-slate-600 disabled:cursor-not-allowed rounded-lg transition">
+                {isDeleting ? "삭제 중..." : "계정 영구 삭제"}
+              </button>
+            </div>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
@@ -22601,7 +23032,8 @@ export default function ChatRoomPage() {
 // 전체 완성본 — 기존 파일을 이것으로 교체하세요
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
@@ -23186,494 +23618,6 @@ model SystemNotice {
 
   @@index([isActive])
   @@map("system_notices")
-}
-</file>
-
-<file path="src/app/profile/page.tsx">
-"use client";
-export const dynamic = 'force-dynamic';
-// src/app/profile/page.tsx
-// ✅ 수정: useSearchParams 제거(미사용), Suspense 불필요하게 됨
-
-import { useSession, signOut } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import ThemeToggle from "@/components/ThemeToggle";
-import { toast } from "@/components/Toast";
-import { useConfirm } from "@/components/ConfirmDialog";
-import { formatFileSize, storagePercent } from "@/lib/client-utils";
-
-interface UserStats {
-  totalFiles: number;
-  totalPosts: number;
-  totalComments: number;
-  storageUsedBytes: number;
-  storageUsedMB: string;
-}
-
-interface UserInfo {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  emailVerified: boolean;
-  createdAt: string;
-  isOnline: boolean;
-}
-
-export default function ProfilePage() {
-  const { data: session, status, update: updateSession } = useSession();
-  const router = useRouter();
-  const { confirmDialog, openConfirm } = useConfirm();
-
-  const [user, setUser] = useState<UserInfo | null>(null);
-  const [stats, setStats] = useState<UserStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [deleteConfirmText, setDeleteConfirmText] = useState("");
-  const [sendingVerification, setSendingVerification] = useState(false);
-  const [verificationSent, setVerificationSent] = useState(false);
-  const [showDeleteSection, setShowDeleteSection] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-
-  // 이름 변경 폼
-  const [nameEdit, setNameEdit] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [nameLoading, setNameLoading] = useState(false);
-
-  // 비밀번호 변경 폼
-  const [pwEdit, setPwEdit] = useState(false);
-  const [currentPw, setCurrentPw] = useState("");
-  const [newPw, setNewPw] = useState("");
-  const [confirmPw, setConfirmPw] = useState("");
-  const [pwLoading, setPwLoading] = useState(false);
-
-  useEffect(() => {
-    if (status === "unauthenticated") router.push("/login");
-  }, [status, router]);
-
-  useEffect(() => {
-    if (session) fetchProfile();
-  }, [session]);
-
-  const fetchProfile = async () => {
-    try {
-      const res = await fetch("/api/users/me");
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data.user);
-        setStats(data.stats);
-        setNewName(data.user.name);
-      }
-    } catch {
-      toast.error("프로필 로드에 실패했습니다");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleNameSave = async () => {
-    if (!newName.trim() || newName.trim() === user?.name) {
-      setNameEdit(false);
-      return;
-    }
-    setNameLoading(true);
-    try {
-      const res = await fetch("/api/users/me", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName.trim() }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setUser((prev) => prev ? { ...prev, name: data.user.name } : prev);
-        await updateSession({ name: data.user.name });
-        toast.success("이름이 변경되었습니다");
-        setNameEdit(false);
-      } else {
-        toast.error(data.error || "이름 변경에 실패했습니다");
-      }
-    } catch {
-      toast.error("오류가 발생했습니다");
-    } finally {
-      setNameLoading(false);
-    }
-  };
-
-  const handlePasswordSave = async () => {
-    if (!currentPw || !newPw || !confirmPw) {
-      toast.warning("모든 필드를 입력해주세요");
-      return;
-    }
-    if (newPw !== confirmPw) {
-      toast.warning("새 비밀번호가 일치하지 않습니다");
-      return;
-    }
-    if (newPw.length < 8) {
-      toast.warning("새 비밀번호는 8자 이상이어야 합니다");
-      return;
-    }
-    setPwLoading(true);
-    try {
-      const res = await fetch("/api/users/me", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ currentPassword: currentPw, newPassword: newPw }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        toast.success("비밀번호가 변경되었습니다");
-        setPwEdit(false);
-        setCurrentPw(""); setNewPw(""); setConfirmPw("");
-      } else {
-        toast.error(data.error || "비밀번호 변경에 실패했습니다");
-      }
-    } catch {
-      toast.error("오류가 발생했습니다");
-    } finally {
-      setPwLoading(false);
-    }
-  };
-
-  const sendVerificationEmail = async () => {
-    setSendingVerification(true);
-    try {
-      const res = await fetch("/api/auth/verify-email", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setVerificationSent(true);
-      toast.success("인증 이메일을 발송했습니다. 받은편지함을 확인해주세요.");
-    } catch (e: any) {
-      toast.error(e.message || "이메일 발송에 실패했습니다");
-    } finally {
-      setSendingVerification(false);
-    }
-  };
-
-  const handleDeleteAccount = async () => {
-    if (deleteConfirmText !== "계정삭제") return;
-    setIsDeleting(true);
-    try {
-      const res = await fetch("/api/users/me", { method: "DELETE" });
-      if (!res.ok) throw new Error();
-      await signOut({ callbackUrl: "/" });
-    } catch {
-      toast.error("계정 삭제에 실패했습니다. 다시 시도해주세요.");
-      setIsDeleting(false);
-    }
-  };
-
-  const handleLogout = () => {
-    openConfirm({
-      title: "로그아웃",
-      message: "로그아웃 하시겠습니까?",
-      confirmLabel: "로그아웃",
-      onConfirm: () => signOut({ callbackUrl: "/login" }),
-    });
-  };
-
-  if (status === "loading" || loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-slate-900">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
-      </div>
-    );
-  }
-
-  if (!session || !user) return null;
-
-  const usagePercent = stats ? storagePercent(stats.storageUsedBytes) : 0;
-  const storageColor =
-    usagePercent > 90 ? "bg-red-500" : usagePercent > 70 ? "bg-yellow-500" : "bg-blue-500";
-
-  return (
-    <div className="min-h-screen bg-gray-50 dark:bg-slate-900">
-      {confirmDialog}
-
-      {/* 헤더 */}
-      <header className="bg-white dark:bg-slate-800 shadow dark:shadow-slate-700/30 sticky top-0 z-10 border-b border-gray-100 dark:border-slate-700">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/dashboard" className="text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 flex items-center gap-2 text-sm">
-            ← 대시보드
-          </Link>
-          <h1 className="text-lg font-bold text-gray-900 dark:text-slate-100">마이페이지</h1>
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
-            <button
-              onClick={handleLogout}
-              className="text-sm text-red-500 hover:text-red-700 font-medium"
-            >
-              로그아웃
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-
-        {/* 프로필 카드 */}
-        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
-          <div className="flex items-center gap-4 mb-6">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-2xl font-bold flex-shrink-0">
-              {user.name.charAt(0).toUpperCase()}
-            </div>
-            <div>
-              <h2 className="text-xl font-bold text-gray-900 dark:text-slate-100">{user.name}</h2>
-              <p className="text-gray-500 dark:text-slate-400 text-sm">{user.email}</p>
-              <span className={`inline-block mt-1 px-2 py-0.5 text-xs rounded-full font-medium ${
-                user.role === "ADMIN"
-                  ? "bg-purple-100 text-purple-700"
-                  : "bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-400"
-              }`}>
-                {user.role === "ADMIN" ? "관리자" : "일반 사용자"}
-              </span>
-            </div>
-          </div>
-
-          {stats && (
-            <div className="grid grid-cols-3 gap-4 pt-4 border-t">
-              {[
-                { label: "파일", value: stats.totalFiles.toLocaleString() },
-                { label: "게시글", value: stats.totalPosts.toLocaleString() },
-                { label: "댓글", value: stats.totalComments.toLocaleString() },
-              ].map(({ label, value }) => (
-                <div key={label} className="text-center">
-                  <p className="text-xl font-bold text-gray-900 dark:text-slate-100">{value}</p>
-                  <p className="text-xs text-gray-500 dark:text-slate-400">{label}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* 스토리지 */}
-        {stats && (
-          <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-3">☁️ 스토리지 사용량</h3>
-            <div className="flex justify-between text-sm text-gray-600 dark:text-slate-400 mb-2">
-              <span>{formatFileSize(stats.storageUsedBytes)} 사용 중</span>
-              <span className="text-gray-400 dark:text-slate-500">/ 5 GB</span>
-            </div>
-            <div className="w-full bg-gray-100 dark:bg-slate-700 rounded-full h-2.5">
-              <div
-                className={`h-2.5 rounded-full transition-all ${storageColor}`}
-                style={{ width: `${usagePercent}%` }}
-              />
-            </div>
-            <p className="text-xs text-gray-400 dark:text-slate-500 mt-1.5">{usagePercent.toFixed(1)}% 사용</p>
-          </div>
-        )}
-
-        {/* 이름 변경 */}
-        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300">✏️ 이름 변경</h3>
-            {!nameEdit && (
-              <button
-                onClick={() => { setNameEdit(true); setNewName(user.name); }}
-                className="text-xs text-blue-600 hover:text-blue-800 font-medium"
-              >
-                변경
-              </button>
-            )}
-          </div>
-          {nameEdit ? (
-            <div className="space-y-3">
-              <input
-                type="text"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                maxLength={20}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
-                placeholder="새 이름 입력"
-                autoFocus
-                onKeyDown={(e) => e.key === "Enter" && handleNameSave()}
-              />
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => { setNameEdit(false); setNewName(user.name); }}
-                  className="px-4 py-1.5 text-sm text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg"
-                >취소</button>
-                <button
-                  onClick={handleNameSave}
-                  disabled={nameLoading || !newName.trim()}
-                  className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {nameLoading ? "저장 중..." : "저장"}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <p className="text-gray-900 dark:text-slate-100 font-medium">{user.name}</p>
-          )}
-        </div>
-
-        {/* 비밀번호 변경 */}
-        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300">🔒 비밀번호 변경</h3>
-            {!pwEdit && (
-              <button onClick={() => setPwEdit(true)} className="text-xs text-blue-600 hover:text-blue-800 font-medium">
-                변경
-              </button>
-            )}
-          </div>
-          {pwEdit ? (
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">현재 비밀번호</label>
-                <input type="password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
-                  placeholder="현재 비밀번호" autoFocus />
-              </div>
-              <div>
-                <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">새 비밀번호</label>
-                <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm"
-                  placeholder="새 비밀번호 (최소 8자)" />
-              </div>
-              <div>
-                <label className="text-xs text-gray-500 dark:text-slate-400 mb-1 block">새 비밀번호 확인</label>
-                <input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-slate-100 text-sm ${
-                    confirmPw && newPw !== confirmPw ? "border-red-400" : "border-gray-300"
-                  }`}
-                  placeholder="새 비밀번호 재입력" />
-                {confirmPw && newPw !== confirmPw && (
-                  <p className="text-xs text-red-500 mt-1">비밀번호가 일치하지 않습니다</p>
-                )}
-              </div>
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => { setPwEdit(false); setCurrentPw(""); setNewPw(""); setConfirmPw(""); }}
-                  className="px-4 py-1.5 text-sm text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg"
-                >취소</button>
-                <button onClick={handlePasswordSave} disabled={pwLoading}
-                  className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                  {pwLoading ? "변경 중..." : "변경하기"}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <p className="text-gray-400 dark:text-slate-500 text-sm">••••••••</p>
-          )}
-        </div>
-
-        {/* 계정 정보 */}
-        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-4">📋 계정 정보</h3>
-          <dl className="space-y-3 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-gray-500 dark:text-slate-400">이메일</dt>
-              <dd className="font-medium text-gray-900 dark:text-slate-100">{user.email}</dd>
-            </div>
-            <div className="flex flex-col gap-1">
-              <div className="flex justify-between">
-                <dt className="text-gray-500 dark:text-slate-400">이메일 인증</dt>
-                <dd className="font-medium text-gray-900 dark:text-slate-100">
-                  {user.emailVerified ? "✅ 인증 완료" : "⚠️ 미인증"}
-                </dd>
-              </div>
-              {!user.emailVerified && (
-                <button
-                  onClick={sendVerificationEmail}
-                  disabled={sendingVerification || verificationSent}
-                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50 text-right"
-                >
-                  {verificationSent ? "발송됨 ✓" : sendingVerification ? "발송 중..." : "인증 이메일 재발송"}
-                </button>
-              )}
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-gray-500 dark:text-slate-400">가입일</dt>
-              <dd className="font-medium text-gray-900 dark:text-slate-100">
-                {new Date(user.createdAt).toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" })}
-              </dd>
-            </div>
-          </dl>
-        </div>
-
-        {/* 바로가기 */}
-        <div className="bg-white dark:bg-slate-800 rounded-xl shadow p-6">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-3">🔗 바로가기</h3>
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              { href: "/dashboard", label: "📁 파일 관리", color: "bg-blue-50 text-blue-700 hover:bg-blue-100" },
-              { href: "/posts", label: "📝 게시글", color: "bg-green-50 text-green-700 hover:bg-green-100" },
-              { href: "/chat", label: "💬 채팅", color: "bg-purple-50 text-purple-700 hover:bg-purple-100" },
-              { href: "/search", label: "🔍 검색", color: "bg-orange-50 text-orange-700 hover:bg-orange-100" },
-              { href: "/notifications", label: "🔔 알림", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
-              { href: "/settings/sessions", label: "💻 로그인 기기", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
-              { href: "/trash", label: "🗑️ 휴지통", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
-              { href: "/users/search", label: "👥 사용자 검색", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
-              { href: "/settings/2fa", label: "🔐 2단계 인증", color: "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-300 hover:bg-gray-100" },
-              ...(user.role === "ADMIN"
-                ? [{ href: "/admin", label: "🛡️ 관리자", color: "bg-red-50 text-red-700 hover:bg-red-100" }]
-                : []),
-            ].map(({ href, label, color }) => (
-              <Link key={href} href={href}
-                className={`flex items-center justify-center py-3 px-4 rounded-lg text-sm font-medium transition ${color}`}>
-                {label}
-              </Link>
-            ))}
-          </div>
-        </div>
-
-        {/* 데이터 내보내기 */}
-        <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-100 dark:border-slate-700 p-5">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-300 mb-3">📦 내 데이터</h3>
-          <p className="text-xs text-gray-500 dark:text-slate-400 mb-3">
-            파일 목록, 게시글, 댓글, 활동 내역 등 내 모든 데이터를 JSON 파일로 내려받을 수 있습니다.
-          </p>
-          <a href="/api/users/me/export" download
-            className="flex items-center justify-center gap-2 w-full py-2.5 text-sm font-medium text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded-xl border border-blue-200 dark:border-blue-800 transition">
-            ⬇️ 데이터 내보내기 (JSON)
-          </a>
-        </div>
-
-        {/* 로그아웃 */}
-        <div>
-          <button onClick={handleLogout}
-            className="w-full py-3 text-sm font-medium text-red-600 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-xl border border-red-200 dark:border-red-800 transition">
-            로그아웃
-          </button>
-        </div>
-
-        {/* 계정 삭제 */}
-        <div className="pb-8">
-          <button
-            onClick={() => setShowDeleteSection(!showDeleteSection)}
-            className="w-full py-2 text-xs text-gray-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition">
-            {showDeleteSection ? "▲ 접기" : "계정 삭제..."}
-          </button>
-          {showDeleteSection && (
-            <div className="mt-3 p-4 rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 space-y-3">
-              <p className="text-sm font-semibold text-red-700 dark:text-red-400">⚠️ 계정 영구 삭제</p>
-              <p className="text-xs text-red-600 dark:text-red-400">
-                계정을 삭제하면 모든 파일, 게시글, 댓글, 채팅 내역이 <strong>영구적으로 삭제</strong>되며 복구할 수 없습니다.
-              </p>
-              <p className="text-xs text-gray-600 dark:text-slate-400">
-                확인을 위해 아래에 <strong className="text-red-600">&quot;계정삭제&quot;</strong> 를 입력하세요.
-              </p>
-              <input
-                type="text"
-                value={deleteConfirmText}
-                onChange={(e) => setDeleteConfirmText(e.target.value)}
-                placeholder="계정삭제"
-                className="w-full border border-red-300 dark:border-red-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white dark:bg-slate-800 dark:text-slate-100"
-              />
-              <button
-                onClick={handleDeleteAccount}
-                disabled={deleteConfirmText !== "계정삭제" || isDeleting}
-                className="w-full py-2.5 text-sm font-bold text-white bg-red-500 hover:bg-red-600 disabled:bg-gray-300 dark:disabled:bg-slate-600 disabled:cursor-not-allowed rounded-lg transition">
-                {isDeleting ? "삭제 중..." : "계정 영구 삭제"}
-              </button>
-            </div>
-          )}
-        </div>
-      </main>
-    </div>
-  );
 }
 </file>
 

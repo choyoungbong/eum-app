@@ -3973,397 +3973,6 @@ export async function POST(request: NextRequest) {
 }
 </file>
 
-<file path="src/app/chat/page.tsx">
-"use client";
-// src/app/chat/page.tsx
-// ✅ 개선판: 다크모드 완전 지원 + UI/UX 개선
-
-import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
-import { useSocket } from "@/hooks/useSocket";
-import { toast } from "@/components/Toast";
-
-interface ChatRoom {
-  id: string;
-  name: string | null;
-  type: "DIRECT" | "GROUP";
-  members: any[];
-  messages: any[];
-  unreadCount: number;
-  updatedAt: string;
-}
-
-export default function ChatPage() {
-  const { data: session, status } = useSession();
-  const router                    = useRouter();
-  const { socket, isConnected }   = useSocket();
-
-  const [chatRooms,         setChatRooms]         = useState<ChatRoom[]>([]);
-  const [loading,           setLoading]           = useState(true);
-  const [showNewChatModal,  setShowNewChatModal]  = useState(false);
-  const [searchQuery,       setSearchQuery]       = useState("");
-  const [searchResults,     setSearchResults]     = useState<any[]>([]);
-  const [isSearching,       setIsSearching]       = useState(false);
-  const [isCreating,        setIsCreating]        = useState(false);
-  const [creatingUserId,    setCreatingUserId]    = useState<string | null>(null);
-
-  useEffect(() => {
-    if (status === "unauthenticated") router.push("/login");
-  }, [status, router]);
-
-  const fetchChatRooms = useCallback(async () => {
-    try {
-      const res = await fetch("/api/chat/rooms");
-      if (res.ok) {
-        const data = await res.json();
-        setChatRooms(data.chatRooms || []);
-      }
-    } catch {
-      console.error("채팅방 목록 로드 실패");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (session) fetchChatRooms();
-  }, [session, fetchChatRooms]);
-
-  // ── 실시간: 새 메시지 오면 목록 순서/미리보기 갱신 ────
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleNewMessage = (data: any) => {
-      setChatRooms((prev) => {
-        const roomIndex = prev.findIndex((r) => r.id === data.chatRoomId);
-        if (roomIndex === -1) return prev;
-
-        const updated = [...prev];
-        const room = { ...updated[roomIndex] };
-
-        room.messages  = [data];
-        room.updatedAt = data.createdAt || new Date().toISOString();
-
-        if (data.senderId !== session?.user?.id) {
-          room.unreadCount = (room.unreadCount || 0) + 1;
-        }
-
-        updated.splice(roomIndex, 1);
-        return [room, ...updated];
-      });
-    };
-
-    socket.on("message:receive", handleNewMessage);
-    socket.on("message:new",     handleNewMessage);
-
-    return () => {
-      socket.off("message:receive", handleNewMessage);
-      socket.off("message:new",     handleNewMessage);
-    };
-  }, [socket, session?.user?.id]);
-
-  const searchUsers = async () => {
-    if (!searchQuery.trim()) return;
-    setIsSearching(true);
-    try {
-      const res = await fetch(
-        `/api/users/search?q=${encodeURIComponent(searchQuery)}`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setSearchResults(data.users || []);
-        if ((data.users || []).length === 0) {
-          toast.info("검색 결과가 없습니다");
-        }
-      }
-    } catch {
-      toast.error("사용자 검색에 실패했습니다");
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const createChatRoom = async (otherUserId: string) => {
-    setIsCreating(true);
-    setCreatingUserId(otherUserId);
-    try {
-      const res = await fetch("/api/chat/rooms", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "DIRECT", memberIds: [otherUserId] }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        router.push(`/chat/${data.chatRoom.id}`);
-      } else {
-        toast.error("채팅방 생성에 실패했습니다");
-      }
-    } catch {
-      toast.error("채팅방 생성 중 오류가 발생했습니다");
-    } finally {
-      setIsCreating(false);
-      setCreatingUserId(null);
-    }
-  };
-
-  const closeModal = () => {
-    setShowNewChatModal(false);
-    setSearchResults([]);
-    setSearchQuery("");
-  };
-
-  const getChatRoomName = (chatRoom: ChatRoom) => {
-    if (chatRoom.type === "GROUP") return chatRoom.name || "그룹 채팅";
-    const other = chatRoom.members.find((m) => m.user.id !== session?.user?.id);
-    return other?.user.name || "알 수 없음";
-  };
-
-  const getChatRoomInitial = (chatRoom: ChatRoom) => {
-    const name = getChatRoomName(chatRoom);
-    return name[0]?.toUpperCase() || "?";
-  };
-
-  const isOnline = (chatRoom: ChatRoom) => {
-    if (chatRoom.type !== "DIRECT") return false;
-    const other = chatRoom.members.find((m) => m.user.id !== session?.user?.id);
-    return other?.user?.isOnline ?? false;
-  };
-
-  const getLastMessage = (chatRoom: ChatRoom) => {
-    if (!chatRoom.messages?.length) return "메시지가 없습니다";
-    const last = chatRoom.messages[0];
-    if (last.type === "FILE")     return "📎 파일";
-    if (last.type === "CALL_LOG") return "📞 통화";
-    if (last.type === "SYSTEM")   return last.content || "시스템 메시지";
-    return last.content || "메시지가 없습니다";
-  };
-
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) return "";
-    const now = new Date();
-    const isToday = date.toDateString() === now.toDateString();
-    if (isToday) {
-      return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-    }
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    if (date.toDateString() === yesterday.toDateString()) return "어제";
-    return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
-  };
-
-  if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-zinc-950">
-        <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  if (!session) return null;
-
-  return (
-    <div className="min-h-screen bg-gray-50 dark:bg-zinc-950">
-      {/* ── 헤더 ── */}
-      <header className="bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 sticky top-0 z-10">
-        <div className="max-w-2xl mx-auto px-4 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-              💬 채팅
-            </h1>
-            <span
-              className={`w-2 h-2 rounded-full transition-colors ${
-                isConnected ? "bg-green-500" : "bg-gray-300 dark:bg-zinc-600"
-              }`}
-              title={isConnected ? "연결됨" : "연결 중..."}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Link
-              href="/dashboard"
-              className="text-sm text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-300"
-            >
-              ← 대시보드
-            </Link>
-            <button
-              onClick={() => setShowNewChatModal(true)}
-              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg font-medium transition-colors"
-            >
-              + 새 채팅
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* ── 채팅방 목록 ── */}
-      <main className="max-w-2xl mx-auto px-4 py-4">
-        {loading ? (
-          <div className="space-y-1">
-            {[1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className="bg-white dark:bg-zinc-900 rounded-xl p-4 flex gap-3 animate-pulse"
-              >
-                <div className="w-12 h-12 rounded-full bg-gray-200 dark:bg-zinc-700 flex-shrink-0" />
-                <div className="flex-1 space-y-2 py-1">
-                  <div className="h-4 bg-gray-200 dark:bg-zinc-700 rounded w-1/3" />
-                  <div className="h-3 bg-gray-100 dark:bg-zinc-800 rounded w-2/3" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : chatRooms.length === 0 ? (
-          <div className="text-center py-16">
-            <p className="text-4xl mb-4">💬</p>
-            <p className="text-gray-500 dark:text-zinc-400 mb-4">
-              아직 대화가 없어요
-            </p>
-            <button
-              onClick={() => setShowNewChatModal(true)}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
-            >
-              첫 채팅 시작하기
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-1">
-            {chatRooms.map((chatRoom) => {
-              const online = isOnline(chatRoom);
-              return (
-                <Link
-                  key={chatRoom.id}
-                  href={`/chat/${chatRoom.id}`}
-                  className="flex items-center gap-3 bg-white dark:bg-zinc-900 hover:bg-gray-50 dark:hover:bg-zinc-800 rounded-xl p-4 transition-colors"
-                >
-                  {/* 아바타 (온라인 표시) */}
-                  <div className="relative flex-shrink-0">
-                    <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-blue-600 dark:text-blue-300 font-bold text-lg">
-                      {getChatRoomInitial(chatRoom)}
-                    </div>
-                    {online && (
-                      <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-zinc-900" />
-                    )}
-                  </div>
-
-                  {/* 내용 */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="font-semibold text-gray-900 dark:text-white text-sm">
-                        {getChatRoomName(chatRoom)}
-                      </span>
-                      <span className="text-xs text-gray-400 dark:text-zinc-500 flex-shrink-0 ml-2">
-                        {formatDate(chatRoom.updatedAt)}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm text-gray-500 dark:text-zinc-400 truncate">
-                        {getLastMessage(chatRoom)}
-                      </p>
-                      {chatRoom.unreadCount > 0 && (
-                        <span className="ml-2 min-w-[20px] h-5 px-1.5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center flex-shrink-0">
-                          {chatRoom.unreadCount > 99 ? "99+" : chatRoom.unreadCount}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </main>
-
-      {/* ── 새 채팅 모달 ── */}
-      {showNewChatModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4"
-          onClick={closeModal}
-        >
-          <div
-            className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-md p-6 animate-slide-up"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-bold mb-4 text-gray-900 dark:text-white">
-              새 채팅 시작
-            </h3>
-
-            <div className="flex gap-2 mb-4">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && searchUsers()}
-                placeholder="이름 또는 이메일로 검색"
-                className="flex-1 px-4 py-2.5 border border-gray-200 dark:border-zinc-700 rounded-xl outline-none focus:border-blue-500 dark:focus:border-blue-500 text-gray-900 dark:text-white bg-gray-50 dark:bg-zinc-800 text-sm transition-colors"
-                autoFocus
-              />
-              <button
-                onClick={searchUsers}
-                disabled={isSearching || !searchQuery.trim()}
-                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium text-sm disabled:opacity-50 transition-colors"
-              >
-                {isSearching ? (
-                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin block" />
-                ) : (
-                  "검색"
-                )}
-              </button>
-            </div>
-
-            {searchResults.length > 0 && (
-              <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
-                {searchResults.map((user) => (
-                  <button
-                    key={user.id}
-                    onClick={() => createChatRoom(user.id)}
-                    disabled={isCreating}
-                    className="w-full p-3 text-left border border-gray-100 dark:border-zinc-700 rounded-xl hover:bg-blue-50 dark:hover:bg-zinc-800 hover:border-blue-200 dark:hover:border-blue-700 transition-colors disabled:opacity-50"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="relative flex-shrink-0">
-                        <div className="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-blue-600 dark:text-blue-300 font-bold text-sm">
-                          {user.name?.[0]?.toUpperCase() || "?"}
-                        </div>
-                        {user.isOnline && (
-                          <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-white dark:border-zinc-900" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 dark:text-white text-sm">
-                          {user.name}
-                        </p>
-                        <p className="text-xs text-gray-500 dark:text-zinc-400 truncate">
-                          {user.email}
-                        </p>
-                      </div>
-                      {creatingUserId === user.id && isCreating && (
-                        <span className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="flex justify-end">
-              <button
-                onClick={closeModal}
-                className="px-4 py-2 text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-xl text-sm font-medium transition-colors"
-              >
-                닫기
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-</file>
-
 <file path="src/app/find-email/page.tsx">
 // =============================================
 // 파일 1: src/app/find-email/page.tsx
@@ -5505,6 +5114,203 @@ export default function FilePreviewModal({ file, onClose }: FilePreviewModalProp
 }
 </file>
 
+<file path="src/components/FileShareModal.tsx">
+"use client";
+
+import { useState, useEffect } from "react";
+import { toast } from "@/components/Toast";
+
+interface Share {
+  id: string;
+  sharedWith: { id: string; email: string; name: string };
+  permission: string;
+  createdAt: string;
+}
+
+interface FileShareModalProps {
+  fileId: string | null;
+  fileName: string;
+  onClose: () => void;
+}
+
+export default function FileShareModal({ fileId, fileName, onClose }: FileShareModalProps) {
+  const [email, setEmail] = useState("");
+  const [permission, setPermission] = useState("VIEW");
+  const [shares, setShares] = useState<Share[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  // ✅ confirm() 대체: 삭제 대기 중인 shareId 저장
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (fileId) fetchShares();
+  }, [fileId]);
+
+  const fetchShares = async () => {
+    if (!fileId) return;
+    try {
+      const res = await fetch(`/api/files/${fileId}/share`);
+      if (res.ok) setShares((await res.json()).shares);
+    } catch {}
+  };
+
+  const handleShare = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fileId || !email) return;
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/files/${fileId}/share`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sharedWithEmail: email, permission }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "공유 실패");
+        return;
+      }
+      // ✅ alert() → toast
+      toast.success("파일이 공유되었습니다");
+      setEmail("");
+      fetchShares();
+    } catch {
+      setError("공유 중 오류가 발생했습니다");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteShare = async (shareId: string) => {
+    if (!fileId) return;
+    try {
+      const res = await fetch(`/api/files/${fileId}/share?shareId=${shareId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        toast.success("공유가 취소되었습니다");
+        fetchShares();
+      } else {
+        toast.error("공유 취소에 실패했습니다");
+      }
+    } catch {
+      toast.error("오류가 발생했습니다");
+    } finally {
+      setPendingDeleteId(null);
+    }
+  };
+
+  if (!fileId) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        {/* 헤더 */}
+        <div className="flex items-center justify-between p-6 border-b">
+          <h3 className="text-lg font-semibold text-gray-900">파일 공유: {fileName}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+        </div>
+
+        <div className="p-6 overflow-y-auto max-h-[60vh]">
+          {/* 공유 추가 폼 */}
+          <form onSubmit={handleShare} className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-2">공유할 사용자 이메일</label>
+            {error && (
+              <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-md">
+                <p className="text-sm text-red-800">{error}</p>
+              </div>
+            )}
+            <div className="flex gap-2 mb-3">
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="user@example.com"
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                required
+              />
+              <select
+                value={permission}
+                onChange={(e) => setPermission(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-md text-gray-900"
+              >
+                <option value="VIEW">보기</option>
+                <option value="EDIT">편집</option>
+              </select>
+              <button
+                type="submit"
+                disabled={loading}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+              >
+                {loading ? "공유 중..." : "공유"}
+              </button>
+            </div>
+          </form>
+
+          {/* 공유 목록 */}
+          {shares.length > 0 && (
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 mb-3">공유된 사용자</h4>
+              <div className="space-y-2">
+                {shares.map((share) => (
+                  <div key={share.id}>
+                    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-md">
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{share.sharedWith.name}</p>
+                        <p className="text-xs text-gray-500">{share.sharedWith.email}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">
+                          {share.permission === "VIEW" ? "보기" : "편집"}
+                        </span>
+                        {/* ✅ confirm() → 인라인 확인 UI */}
+                        {pendingDeleteId === share.id ? (
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-500">취소할까요?</span>
+                            <button
+                              onClick={() => handleDeleteShare(share.id)}
+                              className="text-xs px-2 py-1 bg-red-500 text-white rounded"
+                            >
+                              확인
+                            </button>
+                            <button
+                              onClick={() => setPendingDeleteId(null)}
+                              className="text-xs px-2 py-1 bg-gray-200 rounded"
+                            >
+                              아니오
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setPendingDeleteId(share.id)}
+                            className="text-red-500 hover:text-red-700 text-sm"
+                          >
+                            취소
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end p-6 border-t">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
 <file path="src/components/LazyImage.tsx">
 "use client";
 
@@ -5874,183 +5680,6 @@ export async function sendFileSharedNotification(token: string, senderName: stri
 }
 
 export { admin };
-</file>
-
-<file path="src/lib/firebase.ts">
-// src/lib/firebase.ts
-// ✅ 개선판: Service Worker 무한루프 버그 수정
-// - registration.ready 사용으로 SW 활성화 대기 (안전)
-// - 에러 처리 강화
-
-import { initializeApp, getApps, getApp } from "firebase/app";
-import { getMessaging, getToken, onMessage, Messaging } from "firebase/messaging";
-
-const firebaseConfig = {
-  apiKey:            process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain:        process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId:         process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket:     process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId:             process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-};
-
-// Firebase 앱 초기화 (중복 방지)
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
-
-let messaging: Messaging | null = null;
-
-/**
- * 메시징 객체 초기화 (클라이언트 전용)
- */
-export const getFirebaseMessaging = (): Messaging | null => {
-  if (typeof window === "undefined") return null;
-  if (!("serviceWorker" in navigator)) return null;
-
-  if (!messaging) {
-    try {
-      messaging = getMessaging(app);
-    } catch (error) {
-      console.error("Firebase Messaging 초기화 실패:", error);
-      return null;
-    }
-  }
-  return messaging;
-};
-
-/**
- * FCM 토큰 요청 및 알림 권한 획득
- * ✅ 수정: while 무한루프 → navigator.serviceWorker.ready 사용
- */
-export async function requestNotificationPermission(): Promise<string | null> {
-  try {
-    if (typeof window === "undefined") return null;
-    if (!("Notification" in window)) {
-      console.warn("⚠️ 이 브라우저는 알림을 지원하지 않습니다.");
-      return null;
-    }
-
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") {
-      console.warn("⚠️ 알림 권한이 거부되었습니다.");
-      return null;
-    }
-
-    const msg = getFirebaseMessaging();
-    if (!msg) return null;
-
-    // ✅ 수정: navigator.serviceWorker.ready를 사용해
-    // SW가 활성화될 때까지 안전하게 대기 (타임아웃 포함)
-    let registration: ServiceWorkerRegistration;
-    try {
-      // 먼저 SW 등록 시도
-      registration = await navigator.serviceWorker.register(
-        "/firebase-messaging-sw.js"
-      );
-
-      // SW 활성화 대기 (최대 10초)
-      const readyWithTimeout = Promise.race([
-        navigator.serviceWorker.ready,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("SW ready timeout")), 10000)
-        ),
-      ]);
-      await readyWithTimeout;
-
-      console.log("✅ 서비스 워커 활성화 확인됨");
-    } catch (swError) {
-      console.error("❌ 서비스 워커 등록/활성화 실패:", swError);
-      // SW 없이 토큰 요청 시도
-      try {
-        const token = await getToken(msg, {
-          vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
-        });
-        return token || null;
-      } catch {
-        return null;
-      }
-    }
-
-    // 토큰 요청 (등록된 SW 전달)
-    const token = await getToken(msg, {
-      vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
-      serviceWorkerRegistration: registration,
-    });
-
-    if (token) {
-      console.log("✅ FCM 토큰 생성 성공");
-      return token;
-    }
-
-    console.warn("⚠️ FCM 토큰 발급 실패 (VAPID 키 또는 설정 확인)");
-    return null;
-  } catch (error) {
-    console.error("❌ FCM 토큰 요청 실패:", error);
-    return null;
-  }
-}
-
-/**
- * 포그라운드 메시지 수신 리스너
- */
-export function onForegroundMessage(callback: (payload: any) => void) {
-  const msg = getFirebaseMessaging();
-  if (!msg) return () => {};
-
-  return onMessage(msg, (payload) => {
-    console.log("📬 포그라운드 메시지 수신:", payload);
-    callback(payload);
-  });
-}
-
-/**
- * FCM 토큰 서버 등록
- * ✅ 개선: 기존 토큰과 동일하면 재등록 스킵
- */
-export async function registerFCMToken(): Promise<boolean> {
-  const token = await requestNotificationPermission();
-  if (!token) return false;
-
-  // localStorage에 저장된 토큰과 같으면 재전송 불필요
-  const lastToken = typeof window !== "undefined"
-    ? localStorage.getItem("fcm_token")
-    : null;
-  if (lastToken === token) return true;
-
-  try {
-    const res = await fetch("/api/users/fcm-token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fcmToken: token }),
-    });
-
-    if (res.ok) {
-      console.log("✅ FCM 토큰 서버 등록 성공");
-      if (typeof window !== "undefined") {
-        localStorage.setItem("fcm_token", token);
-      }
-      return true;
-    }
-  } catch (error) {
-    console.error("FCM 토큰 서버 전송 오류:", error);
-  }
-  return false;
-}
-
-/**
- * FCM 토큰 삭제
- */
-export async function unregisterFCMToken(): Promise<boolean> {
-  if (typeof window !== "undefined") {
-    localStorage.removeItem("fcm_token");
-  }
-  try {
-    const res = await fetch("/api/users/fcm-token", { method: "DELETE" });
-    return res.ok;
-  } catch (error) {
-    console.error("FCM 토큰 삭제 오류:", error);
-    return false;
-  }
-}
 </file>
 
 <file path="src/lib/rate-limit.ts">
@@ -11782,6 +11411,397 @@ export default function BannedPage() {
 }
 </file>
 
+<file path="src/app/chat/page.tsx">
+"use client";
+// src/app/chat/page.tsx
+// ✅ 개선판: 다크모드 완전 지원 + UI/UX 개선
+
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
+import { useSocket } from "@/hooks/useSocket";
+import { toast } from "@/components/Toast";
+
+interface ChatRoom {
+  id: string;
+  name: string | null;
+  type: "DIRECT" | "GROUP";
+  members: any[];
+  messages: any[];
+  unreadCount: number;
+  updatedAt: string;
+}
+
+export default function ChatPage() {
+  const { data: session, status } = useSession();
+  const router                    = useRouter();
+  const { socket, isConnected }   = useSocket();
+
+  const [chatRooms,         setChatRooms]         = useState<ChatRoom[]>([]);
+  const [loading,           setLoading]           = useState(true);
+  const [showNewChatModal,  setShowNewChatModal]  = useState(false);
+  const [searchQuery,       setSearchQuery]       = useState("");
+  const [searchResults,     setSearchResults]     = useState<any[]>([]);
+  const [isSearching,       setIsSearching]       = useState(false);
+  const [isCreating,        setIsCreating]        = useState(false);
+  const [creatingUserId,    setCreatingUserId]    = useState<string | null>(null);
+
+  useEffect(() => {
+    if (status === "unauthenticated") router.push("/login");
+  }, [status, router]);
+
+  const fetchChatRooms = useCallback(async () => {
+    try {
+      const res = await fetch("/api/chat/rooms");
+      if (res.ok) {
+        const data = await res.json();
+        setChatRooms(data.chatRooms || []);
+      }
+    } catch {
+      console.error("채팅방 목록 로드 실패");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (session) fetchChatRooms();
+  }, [session, fetchChatRooms]);
+
+  // ── 실시간: 새 메시지 오면 목록 순서/미리보기 갱신 ────
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleNewMessage = (data: any) => {
+      setChatRooms((prev) => {
+        const roomIndex = prev.findIndex((r) => r.id === data.chatRoomId);
+        if (roomIndex === -1) return prev;
+
+        const updated = [...prev];
+        const room = { ...updated[roomIndex] };
+
+        room.messages  = [data];
+        room.updatedAt = data.createdAt || new Date().toISOString();
+
+        if (data.senderId !== session?.user?.id) {
+          room.unreadCount = (room.unreadCount || 0) + 1;
+        }
+
+        updated.splice(roomIndex, 1);
+        return [room, ...updated];
+      });
+    };
+
+    socket.on("message:receive", handleNewMessage);
+    socket.on("message:new",     handleNewMessage);
+
+    return () => {
+      socket.off("message:receive", handleNewMessage);
+      socket.off("message:new",     handleNewMessage);
+    };
+  }, [socket, session?.user?.id]);
+
+  const searchUsers = async () => {
+    if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    try {
+      const res = await fetch(
+        `/api/users/search?q=${encodeURIComponent(searchQuery)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setSearchResults(data.users || []);
+        if ((data.users || []).length === 0) {
+          toast.info("검색 결과가 없습니다");
+        }
+      }
+    } catch {
+      toast.error("사용자 검색에 실패했습니다");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const createChatRoom = async (otherUserId: string) => {
+    setIsCreating(true);
+    setCreatingUserId(otherUserId);
+    try {
+      const res = await fetch("/api/chat/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "DIRECT", memberIds: [otherUserId] }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        router.push(`/chat/${data.chatRoom.id}`);
+      } else {
+        toast.error("채팅방 생성에 실패했습니다");
+      }
+    } catch {
+      toast.error("채팅방 생성 중 오류가 발생했습니다");
+    } finally {
+      setIsCreating(false);
+      setCreatingUserId(null);
+    }
+  };
+
+  const closeModal = () => {
+    setShowNewChatModal(false);
+    setSearchResults([]);
+    setSearchQuery("");
+  };
+
+  const getChatRoomName = (chatRoom: ChatRoom) => {
+    if (chatRoom.type === "GROUP") return chatRoom.name || "그룹 채팅";
+    const other = chatRoom.members.find((m) => m.user.id !== session?.user?.id);
+    return other?.user.name || "알 수 없음";
+  };
+
+  const getChatRoomInitial = (chatRoom: ChatRoom) => {
+    const name = getChatRoomName(chatRoom);
+    return name[0]?.toUpperCase() || "?";
+  };
+
+  const isOnline = (chatRoom: ChatRoom) => {
+    if (chatRoom.type !== "DIRECT") return false;
+    const other = chatRoom.members.find((m) => m.user.id !== session?.user?.id);
+    return other?.user?.isOnline ?? false;
+  };
+
+  const getLastMessage = (chatRoom: ChatRoom) => {
+    if (!chatRoom.messages?.length) return "메시지가 없습니다";
+    const last = chatRoom.messages[0];
+    if (last.type === "FILE")     return "📎 파일";
+    if (last.type === "CALL_LOG") return "📞 통화";
+    if (last.type === "SYSTEM")   return last.content || "시스템 메시지";
+    return last.content || "메시지가 없습니다";
+  };
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return "";
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    if (isToday) {
+      return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    }
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (date.toDateString() === yesterday.toDateString()) return "어제";
+    return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
+  };
+
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-zinc-950">
+        <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!session) return null;
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-zinc-950">
+      {/* ── 헤더 ── */}
+      <header className="bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 sticky top-0 z-10">
+        <div className="max-w-2xl mx-auto px-4 py-4 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+              💬 채팅
+            </h1>
+            <span
+              className={`w-2 h-2 rounded-full transition-colors ${
+                isConnected ? "bg-green-500" : "bg-gray-300 dark:bg-zinc-600"
+              }`}
+              title={isConnected ? "연결됨" : "연결 중..."}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/dashboard"
+              className="text-sm text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-300"
+            >
+              ← 대시보드
+            </Link>
+            <button
+              onClick={() => setShowNewChatModal(true)}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg font-medium transition-colors"
+            >
+              + 새 채팅
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* ── 채팅방 목록 ── */}
+      <main className="max-w-2xl mx-auto px-4 py-4">
+        {loading ? (
+          <div className="space-y-1">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="bg-white dark:bg-zinc-900 rounded-xl p-4 flex gap-3 animate-pulse"
+              >
+                <div className="w-12 h-12 rounded-full bg-gray-200 dark:bg-zinc-700 flex-shrink-0" />
+                <div className="flex-1 space-y-2 py-1">
+                  <div className="h-4 bg-gray-200 dark:bg-zinc-700 rounded w-1/3" />
+                  <div className="h-3 bg-gray-100 dark:bg-zinc-800 rounded w-2/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : chatRooms.length === 0 ? (
+          <div className="text-center py-16">
+            <p className="text-4xl mb-4">💬</p>
+            <p className="text-gray-500 dark:text-zinc-400 mb-4">
+              아직 대화가 없어요
+            </p>
+            <button
+              onClick={() => setShowNewChatModal(true)}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              첫 채팅 시작하기
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {chatRooms.map((chatRoom) => {
+              const online = isOnline(chatRoom);
+              return (
+                <Link
+                  key={chatRoom.id}
+                  href={`/chat/${chatRoom.id}`}
+                  className="flex items-center gap-3 bg-white dark:bg-zinc-900 hover:bg-gray-50 dark:hover:bg-zinc-800 rounded-xl p-4 transition-colors"
+                >
+                  {/* 아바타 (온라인 표시) */}
+                  <div className="relative flex-shrink-0">
+                    <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-blue-600 dark:text-blue-300 font-bold text-lg">
+                      {getChatRoomInitial(chatRoom)}
+                    </div>
+                    {online && (
+                      <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-zinc-900" />
+                    )}
+                  </div>
+
+                  {/* 내용 */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="font-semibold text-gray-900 dark:text-white text-sm">
+                        {getChatRoomName(chatRoom)}
+                      </span>
+                      <span className="text-xs text-gray-400 dark:text-zinc-500 flex-shrink-0 ml-2">
+                        {formatDate(chatRoom.updatedAt)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-gray-500 dark:text-zinc-400 truncate">
+                        {getLastMessage(chatRoom)}
+                      </p>
+                      {chatRoom.unreadCount > 0 && (
+                        <span className="ml-2 min-w-[20px] h-5 px-1.5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center flex-shrink-0">
+                          {chatRoom.unreadCount > 99 ? "99+" : chatRoom.unreadCount}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </main>
+
+      {/* ── 새 채팅 모달 ── */}
+      {showNewChatModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+          onClick={closeModal}
+        >
+          <div
+            className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-md p-6 animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold mb-4 text-gray-900 dark:text-white">
+              새 채팅 시작
+            </h3>
+
+            <div className="flex gap-2 mb-4">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && searchUsers()}
+                placeholder="이름 또는 이메일로 검색"
+                className="flex-1 px-4 py-2.5 border border-gray-200 dark:border-zinc-700 rounded-xl outline-none focus:border-blue-500 dark:focus:border-blue-500 text-gray-900 dark:text-white bg-gray-50 dark:bg-zinc-800 text-sm transition-colors"
+                autoFocus
+              />
+              <button
+                onClick={searchUsers}
+                disabled={isSearching || !searchQuery.trim()}
+                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium text-sm disabled:opacity-50 transition-colors"
+              >
+                {isSearching ? (
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin block" />
+                ) : (
+                  "검색"
+                )}
+              </button>
+            </div>
+
+            {searchResults.length > 0 && (
+              <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
+                {searchResults.map((user) => (
+                  <button
+                    key={user.id}
+                    onClick={() => createChatRoom(user.id)}
+                    disabled={isCreating}
+                    className="w-full p-3 text-left border border-gray-100 dark:border-zinc-700 rounded-xl hover:bg-blue-50 dark:hover:bg-zinc-800 hover:border-blue-200 dark:hover:border-blue-700 transition-colors disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="relative flex-shrink-0">
+                        <div className="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-blue-600 dark:text-blue-300 font-bold text-sm">
+                          {user.name?.[0]?.toUpperCase() || "?"}
+                        </div>
+                        {user.isOnline && (
+                          <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-white dark:border-zinc-900" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-900 dark:text-white text-sm">
+                          {user.name}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-zinc-400 truncate">
+                          {user.email}
+                        </p>
+                      </div>
+                      {creatingUserId === user.id && isCreating && (
+                        <span className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-xl text-sm font-medium transition-colors"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+</file>
+
 <file path="src/app/global-error.tsx">
 // ══════════════════════════════════════════════════════════
 // src/app/global-error.tsx — 최상위 에러 핸들러 (레이아웃 오류)
@@ -16023,203 +16043,6 @@ export function PinnedFilesSection() {
 }
 </file>
 
-<file path="src/components/FileShareModal.tsx">
-"use client";
-
-import { useState, useEffect } from "react";
-import { toast } from "@/components/Toast";
-
-interface Share {
-  id: string;
-  sharedWith: { id: string; email: string; name: string };
-  permission: string;
-  createdAt: string;
-}
-
-interface FileShareModalProps {
-  fileId: string | null;
-  fileName: string;
-  onClose: () => void;
-}
-
-export default function FileShareModal({ fileId, fileName, onClose }: FileShareModalProps) {
-  const [email, setEmail] = useState("");
-  const [permission, setPermission] = useState("VIEW");
-  const [shares, setShares] = useState<Share[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  // ✅ confirm() 대체: 삭제 대기 중인 shareId 저장
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (fileId) fetchShares();
-  }, [fileId]);
-
-  const fetchShares = async () => {
-    if (!fileId) return;
-    try {
-      const res = await fetch(`/api/files/${fileId}/share`);
-      if (res.ok) setShares((await res.json()).shares);
-    } catch {}
-  };
-
-  const handleShare = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!fileId || !email) return;
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch(`/api/files/${fileId}/share`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sharedWithEmail: email, permission }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "공유 실패");
-        return;
-      }
-      // ✅ alert() → toast
-      toast.success("파일이 공유되었습니다");
-      setEmail("");
-      fetchShares();
-    } catch {
-      setError("공유 중 오류가 발생했습니다");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDeleteShare = async (shareId: string) => {
-    if (!fileId) return;
-    try {
-      const res = await fetch(`/api/files/${fileId}/share?shareId=${shareId}`, {
-        method: "DELETE",
-      });
-      if (res.ok) {
-        toast.success("공유가 취소되었습니다");
-        fetchShares();
-      } else {
-        toast.error("공유 취소에 실패했습니다");
-      }
-    } catch {
-      toast.error("오류가 발생했습니다");
-    } finally {
-      setPendingDeleteId(null);
-    }
-  };
-
-  if (!fileId) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
-        {/* 헤더 */}
-        <div className="flex items-center justify-between p-6 border-b">
-          <h3 className="text-lg font-semibold text-gray-900">파일 공유: {fileName}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
-        </div>
-
-        <div className="p-6 overflow-y-auto max-h-[60vh]">
-          {/* 공유 추가 폼 */}
-          <form onSubmit={handleShare} className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">공유할 사용자 이메일</label>
-            {error && (
-              <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-md">
-                <p className="text-sm text-red-800">{error}</p>
-              </div>
-            )}
-            <div className="flex gap-2 mb-3">
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="user@example.com"
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
-                required
-              />
-              <select
-                value={permission}
-                onChange={(e) => setPermission(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md text-gray-900"
-              >
-                <option value="VIEW">보기</option>
-                <option value="EDIT">편집</option>
-              </select>
-              <button
-                type="submit"
-                disabled={loading}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-              >
-                {loading ? "공유 중..." : "공유"}
-              </button>
-            </div>
-          </form>
-
-          {/* 공유 목록 */}
-          {shares.length > 0 && (
-            <div>
-              <h4 className="text-sm font-medium text-gray-700 mb-3">공유된 사용자</h4>
-              <div className="space-y-2">
-                {shares.map((share) => (
-                  <div key={share.id}>
-                    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-md">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{share.sharedWith.name}</p>
-                        <p className="text-xs text-gray-500">{share.sharedWith.email}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">
-                          {share.permission === "VIEW" ? "보기" : "편집"}
-                        </span>
-                        {/* ✅ confirm() → 인라인 확인 UI */}
-                        {pendingDeleteId === share.id ? (
-                          <div className="flex items-center gap-1">
-                            <span className="text-xs text-gray-500">취소할까요?</span>
-                            <button
-                              onClick={() => handleDeleteShare(share.id)}
-                              className="text-xs px-2 py-1 bg-red-500 text-white rounded"
-                            >
-                              확인
-                            </button>
-                            <button
-                              onClick={() => setPendingDeleteId(null)}
-                              className="text-xs px-2 py-1 bg-gray-200 rounded"
-                            >
-                              아니오
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => setPendingDeleteId(share.id)}
-                            className="text-red-500 hover:text-red-700 text-sm"
-                          >
-                            취소
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="flex justify-end p-6 border-t">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-          >
-            닫기
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-</file>
-
 <file path="src/components/FileVersionHistory.tsx">
 "use client";
 // src/components/FileVersionHistory.tsx
@@ -17185,196 +17008,6 @@ const MessageBubble = memo(function MessageBubble({
 });
 
 export default MessageBubble;
-</file>
-
-<file path="src/components/MobileBottomNav.tsx">
-"use client";
-// src/components/MobileBottomNav.tsx
-// ✅ 개선판: 채팅 미읽음 뱃지 추가 + 실시간 소켓 업데이트
-
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
-import { useSession } from "next-auth/react";
-import {
-  LayoutDashboard,
-  MessageCircle,
-  Bell,
-  Search,
-  User,
-} from "lucide-react";
-import { getOrCreateSocket } from "@/hooks/useSocket";
-
-const TABS = [
-  { href: "/dashboard",     icon: LayoutDashboard, label: "홈",    tour: "dashboard" },
-  { href: "/search",        icon: Search,          label: "검색",  tour: "search" },
-  { href: "/chat",          icon: MessageCircle,   label: "채팅",  tour: "chat" },
-  { href: "/notifications", icon: Bell,            label: "알림",  tour: "notifications" },
-  { href: "/profile",       icon: User,            label: "프로필", tour: "profile" },
-];
-
-export default function MobileBottomNav() {
-  const pathname            = usePathname();
-  const { data: session }   = useSession();
-  const [unreadNotif, setUnreadNotif] = useState(0);
-  const [unreadChat,  setUnreadChat]  = useState(0);
-
-  // ── 알림 미읽음 수 ─────────────────────────────────────
-  const fetchNotifCount = useCallback(async () => {
-    try {
-      const r = await fetch("/api/notifications?limit=1");
-      const d = await r.json();
-      setUnreadNotif(d.unreadCount ?? 0);
-    } catch {}
-  }, []);
-
-  // ── 채팅 미읽음 수 ─────────────────────────────────────
-  const fetchChatCount = useCallback(async () => {
-    try {
-      const r = await fetch("/api/chat/rooms");
-      const d = await r.json();
-      const total = (d.chatRooms ?? []).reduce(
-        (sum: number, room: any) => sum + (room.unreadCount || 0),
-        0
-      );
-      setUnreadChat(total);
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    if (!session?.user) return;
-    fetchNotifCount();
-    fetchChatCount();
-
-    // 30초마다 폴링
-    const timer = setInterval(() => {
-      fetchNotifCount();
-      fetchChatCount();
-    }, 30_000);
-    return () => clearInterval(timer);
-  }, [pathname, session?.user, fetchNotifCount, fetchChatCount]);
-
-  // ── 실시간 소켓: 새 메시지 → 채팅 뱃지 즉시 업데이트 ──
-  useEffect(() => {
-    if (!session?.user?.id) return;
-    const socket = getOrCreateSocket(session.user.id);
-
-    const handleMsg = (data: any) => {
-      // 현재 채팅방 안에 있으면 카운트 증가 안 함
-      const isInCurrentRoom =
-        pathname.startsWith("/chat/") &&
-        pathname.endsWith(data.chatRoomId ?? "");
-      if (!isInCurrentRoom && data.senderId !== session.user?.id) {
-        setUnreadChat((c) => c + 1);
-      }
-    };
-
-    const handleNotif = () => setUnreadNotif((n) => n + 1);
-
-    socket.on("message:receive", handleMsg);
-    socket.on("message:new",     handleMsg);
-    socket.on("notification:new", handleNotif);
-
-    return () => {
-      socket.off("message:receive", handleMsg);
-      socket.off("message:new",     handleMsg);
-      socket.off("notification:new", handleNotif);
-    };
-  }, [session?.user?.id, session?.user, pathname]);
-
-  // 채팅방 입장 시 해당 채팅의 미읽음 초기화
-  useEffect(() => {
-    if (pathname.startsWith("/chat/")) {
-      // 채팅방 입장하면 잠시 후 재조회
-      const t = setTimeout(fetchChatCount, 1000);
-      return () => clearTimeout(t);
-    }
-    // 알림 페이지 입장 시 알림 미읽음 초기화
-    if (pathname === "/notifications") {
-      const t = setTimeout(fetchNotifCount, 1000);
-      return () => clearTimeout(t);
-    }
-  }, [pathname, fetchChatCount, fetchNotifCount]);
-
-  // 로그인/공개 페이지에서는 숨김
-  const hiddenPaths = ["/", "/login", "/register", "/share"];
-  if (
-    hiddenPaths.some(
-      (p) => pathname === p || pathname.startsWith("/share/")
-    )
-  )
-    return null;
-
-  return (
-    <>
-      {/* 하단 여백 (콘텐츠가 탭에 가리지 않도록) */}
-      <div className="h-20 md:hidden" aria-hidden />
-
-      <nav
-        className="fixed bottom-0 left-0 right-0 z-50 md:hidden
-                   bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl
-                   border-t border-gray-200 dark:border-slate-700
-                   safe-area-padding-bottom"
-      >
-        <div className="flex items-center justify-around px-2 py-2 pb-safe">
-          {TABS.map(({ href, icon: Icon, label, tour }) => {
-            const isActive =
-              pathname === href || pathname.startsWith(href + "/");
-            const isBell  = href === "/notifications";
-            const isChat  = href === "/chat";
-            const badge   = isBell ? unreadNotif : isChat ? unreadChat : 0;
-
-            return (
-              <Link
-                key={href}
-                href={href}
-                data-tour={tour}
-                className={`relative flex flex-col items-center gap-1 px-3 py-2 rounded-xl transition-all min-w-0 flex-1 ${
-                  isActive
-                    ? "text-blue-600 dark:text-blue-400"
-                    : "text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-300"
-                }`}
-              >
-                {/* 활성 인디케이터 */}
-                {isActive && (
-                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-blue-600 dark:bg-blue-400 rounded-full" />
-                )}
-
-                {/* 아이콘 + 뱃지 */}
-                <div className="relative">
-                  <Icon
-                    size={22}
-                    strokeWidth={isActive ? 2.5 : 1.8}
-                    className="transition-all"
-                    fill={isActive ? "currentColor" : "none"}
-                    style={{ fillOpacity: isActive ? 0.12 : 0 }}
-                  />
-                  {/* 미읽음 뱃지 (알림 & 채팅 공통) */}
-                  {badge > 0 && (
-                    <span className="absolute -top-1 -right-1 min-w-[16px] h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center px-1 leading-none">
-                      {badge > 99 ? "99+" : badge}
-                    </span>
-                  )}
-                </div>
-
-                {/* 레이블 */}
-                <span
-                  className={`text-[10px] font-semibold leading-none truncate ${
-                    isActive
-                      ? "text-blue-600 dark:text-blue-400"
-                      : "text-gray-500 dark:text-slate-400"
-                  }`}
-                >
-                  {label}
-                </span>
-              </Link>
-            );
-          })}
-        </div>
-      </nav>
-    </>
-  );
-}
 </file>
 
 <file path="src/components/Notificationsettings.tsx">
@@ -19399,6 +19032,183 @@ export function accountBannedTemplate(name: string, reason: string) {
 }
 </file>
 
+<file path="src/lib/firebase.ts">
+// src/lib/firebase.ts
+// ✅ 개선판: Service Worker 무한루프 버그 수정
+// - registration.ready 사용으로 SW 활성화 대기 (안전)
+// - 에러 처리 강화
+
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { getMessaging, getToken, onMessage, Messaging } from "firebase/messaging";
+
+const firebaseConfig = {
+  apiKey:            process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain:        process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId:         process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket:     process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId:             process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+};
+
+// Firebase 앱 초기화 (중복 방지)
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+
+let messaging: Messaging | null = null;
+
+/**
+ * 메시징 객체 초기화 (클라이언트 전용)
+ */
+export const getFirebaseMessaging = (): Messaging | null => {
+  if (typeof window === "undefined") return null;
+  if (!("serviceWorker" in navigator)) return null;
+
+  if (!messaging) {
+    try {
+      messaging = getMessaging(app);
+    } catch (error) {
+      console.error("Firebase Messaging 초기화 실패:", error);
+      return null;
+    }
+  }
+  return messaging;
+};
+
+/**
+ * FCM 토큰 요청 및 알림 권한 획득
+ * ✅ 수정: while 무한루프 → navigator.serviceWorker.ready 사용
+ */
+export async function requestNotificationPermission(): Promise<string | null> {
+  try {
+    if (typeof window === "undefined") return null;
+    if (!("Notification" in window)) {
+      console.warn("⚠️ 이 브라우저는 알림을 지원하지 않습니다.");
+      return null;
+    }
+
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      console.warn("⚠️ 알림 권한이 거부되었습니다.");
+      return null;
+    }
+
+    const msg = getFirebaseMessaging();
+    if (!msg) return null;
+
+    // ✅ 수정: navigator.serviceWorker.ready를 사용해
+    // SW가 활성화될 때까지 안전하게 대기 (타임아웃 포함)
+    let registration: ServiceWorkerRegistration;
+    try {
+      // 먼저 SW 등록 시도
+      registration = await navigator.serviceWorker.register(
+        "/firebase-messaging-sw.js"
+      );
+
+      // SW 활성화 대기 (최대 10초)
+      const readyWithTimeout = Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("SW ready timeout")), 10000)
+        ),
+      ]);
+      await readyWithTimeout;
+
+      console.log("✅ 서비스 워커 활성화 확인됨");
+    } catch (swError) {
+      console.error("❌ 서비스 워커 등록/활성화 실패:", swError);
+      // SW 없이 토큰 요청 시도
+      try {
+        const token = await getToken(msg, {
+          vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+        });
+        return token || null;
+      } catch {
+        return null;
+      }
+    }
+
+    // 토큰 요청 (등록된 SW 전달)
+    const token = await getToken(msg, {
+      vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+      serviceWorkerRegistration: registration,
+    });
+
+    if (token) {
+      console.log("✅ FCM 토큰 생성 성공");
+      return token;
+    }
+
+    console.warn("⚠️ FCM 토큰 발급 실패 (VAPID 키 또는 설정 확인)");
+    return null;
+  } catch (error) {
+    console.error("❌ FCM 토큰 요청 실패:", error);
+    return null;
+  }
+}
+
+/**
+ * 포그라운드 메시지 수신 리스너
+ */
+export function onForegroundMessage(callback: (payload: any) => void) {
+  const msg = getFirebaseMessaging();
+  if (!msg) return () => {};
+
+  return onMessage(msg, (payload) => {
+    console.log("📬 포그라운드 메시지 수신:", payload);
+    callback(payload);
+  });
+}
+
+/**
+ * FCM 토큰 서버 등록
+ * ✅ 개선: 기존 토큰과 동일하면 재등록 스킵
+ */
+export async function registerFCMToken(): Promise<boolean> {
+  const token = await requestNotificationPermission();
+  if (!token) return false;
+
+  // localStorage에 저장된 토큰과 같으면 재전송 불필요
+  const lastToken = typeof window !== "undefined"
+    ? localStorage.getItem("fcm_token")
+    : null;
+  if (lastToken === token) return true;
+
+  try {
+    const res = await fetch("/api/users/fcm-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fcmToken: token }),
+    });
+
+    if (res.ok) {
+      console.log("✅ FCM 토큰 서버 등록 성공");
+      if (typeof window !== "undefined") {
+        localStorage.setItem("fcm_token", token);
+      }
+      return true;
+    }
+  } catch (error) {
+    console.error("FCM 토큰 서버 전송 오류:", error);
+  }
+  return false;
+}
+
+/**
+ * FCM 토큰 삭제
+ */
+export async function unregisterFCMToken(): Promise<boolean> {
+  if (typeof window !== "undefined") {
+    localStorage.removeItem("fcm_token");
+  }
+  try {
+    const res = await fetch("/api/users/fcm-token", { method: "DELETE" });
+    return res.ok;
+  } catch (error) {
+    console.error("FCM 토큰 삭제 오류:", error);
+    return false;
+  }
+}
+</file>
+
 <file path="src/lib/image-optimizer.ts">
 // src/lib/image-optimizer.ts
 // sharp 기반 이미지 최적화 파이프라인
@@ -19862,164 +19672,6 @@ export function withRequestLog<T extends unknown[]>(
  */
 </file>
 
-<file path="src/lib/socket-client.ts">
-// src/lib/socket-client.ts
-// ✅ 개선판: 소켓 싱글톤을 hooks/useSocket.ts로 통합
-// useUploadProgress 훅 포함 (UploadProgressOverlay.tsx에서 사용)
-
-"use client";
-
-import { useEffect, useState, useCallback, useRef } from "react";
-import { useSession } from "next-auth/react";
-import { getOrCreateSocket } from "@/hooks/useSocket";
-
-// ── 전역 소켓 연결 훅 (providers에서 한 번만 사용) ─────────
-export function useSocketConnection() {
-  const { data: session, status } = useSession();
-  const [connected, setConnected] = useState(false);
-
-  useEffect(() => {
-    if (status !== "authenticated" || !session?.user?.id) return;
-    const socket = getOrCreateSocket(session.user.id);
-
-    const onConnect    = () => setConnected(true);
-    const onDisconnect = () => setConnected(false);
-
-    socket.on("connect",    onConnect);
-    socket.on("disconnect", onDisconnect);
-    if (socket.connected) setConnected(true);
-
-    return () => {
-      socket.off("connect",    onConnect);
-      socket.off("disconnect", onDisconnect);
-    };
-  }, [status, session?.user?.id]);
-
-  return connected;
-}
-
-// ── 실시간 알림 훅 ────────────────────────────────────────
-export function useSocketNotifications(
-  onNew: (n: { type: string; message: string; createdAt: string }) => void
-) {
-  const { data: session, status } = useSession();
-
-  useEffect(() => {
-    if (status !== "authenticated" || !session?.user?.id) return;
-    const socket = getOrCreateSocket(session.user.id);
-    socket.on("notification:new", onNew);
-    return () => { socket.off("notification:new", onNew); };
-  }, [onNew, status, session?.user?.id]);
-}
-
-// ── 채팅 타이핑 인디케이터 훅 ─────────────────────────────
-interface TypingState {
-  [userId: string]: boolean;
-}
-
-export function useTypingIndicator(roomId: string | null) {
-  const { data: session } = useSession();
-  const [typingUsers, setTypingUsers] = useState<TypingState>({});
-
-  useEffect(() => {
-    if (!roomId || !session?.user?.id) return;
-    const socket = getOrCreateSocket(session.user.id);
-    socket.emit("chat:join", roomId);
-
-    const handler = ({ userId, isTyping }: { userId: string; isTyping: boolean }) => {
-      setTypingUsers((prev) => ({ ...prev, [userId]: isTyping }));
-    };
-
-    socket.on("typing:update", handler);
-    return () => {
-      socket.emit("chat:leave", roomId);
-      socket.off("typing:update", handler);
-    };
-  }, [roomId, session?.user?.id]);
-
-  const startTyping = useCallback(() => {
-    if (!roomId || !session?.user?.id) return;
-    getOrCreateSocket(session.user.id).emit("typing:start", { chatRoomId: roomId });
-  }, [roomId, session?.user?.id]);
-
-  const stopTyping = useCallback(() => {
-    if (!roomId || !session?.user?.id) return;
-    getOrCreateSocket(session.user.id).emit("typing:stop", { chatRoomId: roomId });
-  }, [roomId, session?.user?.id]);
-
-  const typingUserIds = Object.entries(typingUsers)
-    .filter(([, v]) => v)
-    .map(([k]) => k);
-
-  return { typingUserIds, startTyping, stopTyping };
-}
-
-// ── 업로드 진행률 훅 ──────────────────────────────────────
-// UploadProgressOverlay.tsx에서 사용
-interface UploadItem {
-  fileId: string;
-  filename: string;
-  progress: number;
-  done: boolean;
-}
-
-export function useUploadProgress() {
-  const { data: session } = useSession();
-  const [uploads, setUploads] = useState<UploadItem[]>([]);
-  const timersRef = useRef<Record<string, NodeJS.Timeout>>({});
-
-  useEffect(() => {
-    if (!session?.user?.id) return;
-    const socket = getOrCreateSocket(session.user.id);
-
-    const onProgress = ({ fileId, progress, filename }: {
-      fileId: string;
-      progress: number;
-      filename: string;
-    }) => {
-      setUploads((prev) => {
-        const exists = prev.find((u) => u.fileId === fileId);
-        if (exists) {
-          return prev.map((u) =>
-            u.fileId === fileId ? { ...u, progress: Math.round(progress), filename } : u
-          );
-        }
-        return [...prev, { fileId, filename, progress: Math.round(progress), done: false }];
-      });
-    };
-
-    const onDone = ({ fileId, filename }: { fileId: string; filename: string }) => {
-      setUploads((prev) =>
-        prev.map((u) => u.fileId === fileId ? { ...u, progress: 100, done: true } : u)
-      );
-      // 3초 후 자동 제거
-      clearTimeout(timersRef.current[fileId]);
-      timersRef.current[fileId] = setTimeout(() => {
-        setUploads((prev) => prev.filter((u) => u.fileId !== fileId));
-        delete timersRef.current[fileId];
-      }, 3000);
-    };
-
-    socket.on("upload:progress:update", onProgress);
-    socket.on("upload:done:update",     onDone);
-
-    return () => {
-      socket.off("upload:progress:update", onProgress);
-      socket.off("upload:done:update",     onDone);
-    };
-  }, [session?.user?.id]);
-
-  // 언마운트 시 타이머 정리
-  useEffect(() => {
-    return () => {
-      Object.values(timersRef.current).forEach(clearTimeout);
-    };
-  }, []);
-
-  return { uploads };
-}
-</file>
-
 <file path="src/lib/sound.ts">
 // src/lib/sound.ts
 // Web Audio API 기반 알림 사운드 — 외부 파일 불필요
@@ -20395,69 +20047,6 @@ export const config = {
     "/((?!api/auth|_next/static|_next/image|favicon.ico).*)",
   ],
 };
-</file>
-
-<file path="src/pages/api/socket/io.ts">
-// src/pages/api/socket/io.ts
-// ✅ 개선판: initSocketServer를 사용하여 실제 WebRTC 시그널링 처리
-// 기존 레거시 파일은 WebRTC 이벤트가 없어 통화 기능이 작동하지 않았음
-
-import { Server as NetServer } from "http";
-import { NextApiRequest, NextApiResponse } from "next";
-import { Socket } from "net";
-import { Server as SocketIOServer } from "socket.io";
-import { initSocketServer } from "@/lib/socket-server";
-
-export type NextApiResponseServerIo = NextApiResponse & {
-  socket: Socket & {
-    server: NetServer & {
-      io: SocketIOServer;
-    };
-  };
-};
-
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
-const ioHandler = (req: NextApiRequest, res: NextApiResponseServerIo) => {
-  if (!res.socket.server.io) {
-    console.log("🔌 Socket.IO 서버 초기화 중...");
-
-    const httpServer: NetServer = res.socket.server as any;
-    const io = new SocketIOServer(httpServer, {
-      path: "/api/socket/io",
-      addTrailingSlash: false,
-      pingTimeout: 60000,
-      pingInterval: 25000,
-      cors: {
-        origin:
-          process.env.NEXTAUTH_URL ||
-          process.env.NEXT_PUBLIC_APP_URL ||
-          "*",
-        methods: ["GET", "POST"],
-        credentials: true,
-      },
-      // 대용량 메시지 허용 (파일 공유 등)
-      maxHttpBufferSize: 1e7, // 10MB
-    });
-
-    // ✅ 핵심: initSocketServer를 통해 WebRTC + 채팅 + 알림 이벤트 등록
-    initSocketServer(io);
-
-    // 전역 io 저장 (emitToUser 등에서 사용)
-    (global as any).io = io;
-    res.socket.server.io = io;
-
-    console.log("✅ Socket.IO 서버 초기화 완료");
-  }
-
-  res.end();
-};
-
-export default ioHandler;
 </file>
 
 <file path="src/types/next-auth.d.ts">
@@ -22614,6 +22203,196 @@ export default function UserSearchPage() {
 }
 </file>
 
+<file path="src/components/MobileBottomNav.tsx">
+"use client";
+// src/components/MobileBottomNav.tsx
+// ✅ 개선판: 채팅 미읽음 뱃지 추가 + 실시간 소켓 업데이트
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useState, useCallback } from "react";
+import { useSession } from "next-auth/react";
+import {
+  LayoutDashboard,
+  MessageCircle,
+  Bell,
+  Search,
+  User,
+} from "lucide-react";
+import { getOrCreateSocket } from "@/hooks/useSocket";
+
+const TABS = [
+  { href: "/dashboard",     icon: LayoutDashboard, label: "홈",    tour: "dashboard" },
+  { href: "/search",        icon: Search,          label: "검색",  tour: "search" },
+  { href: "/chat",          icon: MessageCircle,   label: "채팅",  tour: "chat" },
+  { href: "/notifications", icon: Bell,            label: "알림",  tour: "notifications" },
+  { href: "/profile",       icon: User,            label: "프로필", tour: "profile" },
+];
+
+export default function MobileBottomNav() {
+  const pathname            = usePathname();
+  const { data: session }   = useSession();
+  const [unreadNotif, setUnreadNotif] = useState(0);
+  const [unreadChat,  setUnreadChat]  = useState(0);
+
+  // ── 알림 미읽음 수 ─────────────────────────────────────
+  const fetchNotifCount = useCallback(async () => {
+    try {
+      const r = await fetch("/api/notifications?limit=1");
+      const d = await r.json();
+      setUnreadNotif(d.unreadCount ?? 0);
+    } catch {}
+  }, []);
+
+  // ── 채팅 미읽음 수 ─────────────────────────────────────
+  const fetchChatCount = useCallback(async () => {
+    try {
+      const r = await fetch("/api/chat/rooms");
+      const d = await r.json();
+      const total = (d.chatRooms ?? []).reduce(
+        (sum: number, room: any) => sum + (room.unreadCount || 0),
+        0
+      );
+      setUnreadChat(total);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (!session?.user) return;
+    fetchNotifCount();
+    fetchChatCount();
+
+    // 30초마다 폴링
+    const timer = setInterval(() => {
+      fetchNotifCount();
+      fetchChatCount();
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [pathname, session?.user, fetchNotifCount, fetchChatCount]);
+
+  // ── 실시간 소켓: 새 메시지 → 채팅 뱃지 즉시 업데이트 ──
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    const socket = getOrCreateSocket(session.user.id);
+
+    const handleMsg = (data: any) => {
+      // 현재 채팅방 안에 있으면 카운트 증가 안 함
+      const isInCurrentRoom =
+        pathname.startsWith("/chat/") &&
+        pathname.endsWith(data.chatRoomId ?? "");
+      if (!isInCurrentRoom && data.senderId !== session.user?.id) {
+        setUnreadChat((c) => c + 1);
+      }
+    };
+
+    const handleNotif = () => setUnreadNotif((n) => n + 1);
+
+    socket.on("message:receive", handleMsg);
+    socket.on("message:new",     handleMsg);
+    socket.on("notification:new", handleNotif);
+
+    return () => {
+      socket.off("message:receive", handleMsg);
+      socket.off("message:new",     handleMsg);
+      socket.off("notification:new", handleNotif);
+    };
+  }, [session?.user?.id, session?.user, pathname]);
+
+  // 채팅방 입장 시 해당 채팅의 미읽음 초기화
+  useEffect(() => {
+    if (pathname.startsWith("/chat/")) {
+      // 채팅방 입장하면 잠시 후 재조회
+      const t = setTimeout(fetchChatCount, 1000);
+      return () => clearTimeout(t);
+    }
+    // 알림 페이지 입장 시 알림 미읽음 초기화
+    if (pathname === "/notifications") {
+      const t = setTimeout(fetchNotifCount, 1000);
+      return () => clearTimeout(t);
+    }
+  }, [pathname, fetchChatCount, fetchNotifCount]);
+
+  // 로그인/공개 페이지에서는 숨김
+  const hiddenPaths = ["/", "/login", "/register", "/share"];
+  if (
+    hiddenPaths.some(
+      (p) => pathname === p || pathname.startsWith("/share/")
+    )
+  )
+    return null;
+
+  return (
+    <>
+      {/* 하단 여백 (콘텐츠가 탭에 가리지 않도록) */}
+      <div className="h-20 md:hidden" aria-hidden />
+
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-50 md:hidden
+                   bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl
+                   border-t border-gray-200 dark:border-slate-700
+                   safe-area-padding-bottom"
+      >
+        <div className="flex items-center justify-around px-2 py-2 pb-safe">
+          {TABS.map(({ href, icon: Icon, label, tour }) => {
+            const isActive =
+              pathname === href || pathname.startsWith(href + "/");
+            const isBell  = href === "/notifications";
+            const isChat  = href === "/chat";
+            const badge   = isBell ? unreadNotif : isChat ? unreadChat : 0;
+
+            return (
+              <Link
+                key={href}
+                href={href}
+                data-tour={tour}
+                className={`relative flex flex-col items-center gap-1 px-3 py-2 rounded-xl transition-all min-w-0 flex-1 ${
+                  isActive
+                    ? "text-blue-600 dark:text-blue-400"
+                    : "text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-300"
+                }`}
+              >
+                {/* 활성 인디케이터 */}
+                {isActive && (
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-blue-600 dark:bg-blue-400 rounded-full" />
+                )}
+
+                {/* 아이콘 + 뱃지 */}
+                <div className="relative">
+                  <Icon
+                    size={22}
+                    strokeWidth={isActive ? 2.5 : 1.8}
+                    className="transition-all"
+                    fill={isActive ? "currentColor" : "none"}
+                    style={{ fillOpacity: isActive ? 0.12 : 0 }}
+                  />
+                  {/* 미읽음 뱃지 (알림 & 채팅 공통) */}
+                  {badge > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[16px] h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center px-1 leading-none">
+                      {badge > 99 ? "99+" : badge}
+                    </span>
+                  )}
+                </div>
+
+                {/* 레이블 */}
+                <span
+                  className={`text-[10px] font-semibold leading-none truncate ${
+                    isActive
+                      ? "text-blue-600 dark:text-blue-400"
+                      : "text-gray-500 dark:text-slate-400"
+                  }`}
+                >
+                  {label}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
+    </>
+  );
+}
+</file>
+
 <file path="src/lib/notification.ts">
 // src/lib/notification.ts
 import { prisma } from "@/lib/db";
@@ -22650,6 +22429,164 @@ export async function createNotification(input: CreateNotificationInput) {
   } catch (error) {
     console.error("createNotification error:", error);
   }
+}
+</file>
+
+<file path="src/lib/socket-client.ts">
+// src/lib/socket-client.ts
+// ✅ 개선판: 소켓 싱글톤을 hooks/useSocket.ts로 통합
+// useUploadProgress 훅 포함 (UploadProgressOverlay.tsx에서 사용)
+
+"use client";
+
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useSession } from "next-auth/react";
+import { getOrCreateSocket } from "@/hooks/useSocket";
+
+// ── 전역 소켓 연결 훅 (providers에서 한 번만 사용) ─────────
+export function useSocketConnection() {
+  const { data: session, status } = useSession();
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    if (status !== "authenticated" || !session?.user?.id) return;
+    const socket = getOrCreateSocket(session.user.id);
+
+    const onConnect    = () => setConnected(true);
+    const onDisconnect = () => setConnected(false);
+
+    socket.on("connect",    onConnect);
+    socket.on("disconnect", onDisconnect);
+    if (socket.connected) setConnected(true);
+
+    return () => {
+      socket.off("connect",    onConnect);
+      socket.off("disconnect", onDisconnect);
+    };
+  }, [status, session?.user?.id]);
+
+  return connected;
+}
+
+// ── 실시간 알림 훅 ────────────────────────────────────────
+export function useSocketNotifications(
+  onNew: (n: { type: string; message: string; createdAt: string }) => void
+) {
+  const { data: session, status } = useSession();
+
+  useEffect(() => {
+    if (status !== "authenticated" || !session?.user?.id) return;
+    const socket = getOrCreateSocket(session.user.id);
+    socket.on("notification:new", onNew);
+    return () => { socket.off("notification:new", onNew); };
+  }, [onNew, status, session?.user?.id]);
+}
+
+// ── 채팅 타이핑 인디케이터 훅 ─────────────────────────────
+interface TypingState {
+  [userId: string]: boolean;
+}
+
+export function useTypingIndicator(roomId: string | null) {
+  const { data: session } = useSession();
+  const [typingUsers, setTypingUsers] = useState<TypingState>({});
+
+  useEffect(() => {
+    if (!roomId || !session?.user?.id) return;
+    const socket = getOrCreateSocket(session.user.id);
+    socket.emit("chat:join", roomId);
+
+    const handler = ({ userId, isTyping }: { userId: string; isTyping: boolean }) => {
+      setTypingUsers((prev) => ({ ...prev, [userId]: isTyping }));
+    };
+
+    socket.on("typing:update", handler);
+    return () => {
+      socket.emit("chat:leave", roomId);
+      socket.off("typing:update", handler);
+    };
+  }, [roomId, session?.user?.id]);
+
+  const startTyping = useCallback(() => {
+    if (!roomId || !session?.user?.id) return;
+    getOrCreateSocket(session.user.id).emit("typing:start", { chatRoomId: roomId });
+  }, [roomId, session?.user?.id]);
+
+  const stopTyping = useCallback(() => {
+    if (!roomId || !session?.user?.id) return;
+    getOrCreateSocket(session.user.id).emit("typing:stop", { chatRoomId: roomId });
+  }, [roomId, session?.user?.id]);
+
+  const typingUserIds = Object.entries(typingUsers)
+    .filter(([, v]) => v)
+    .map(([k]) => k);
+
+  return { typingUserIds, startTyping, stopTyping };
+}
+
+// ── 업로드 진행률 훅 ──────────────────────────────────────
+// UploadProgressOverlay.tsx에서 사용
+interface UploadItem {
+  fileId: string;
+  filename: string;
+  progress: number;
+  done: boolean;
+}
+
+export function useUploadProgress() {
+  const { data: session } = useSession();
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const timersRef = useRef<Record<string, NodeJS.Timeout>>({});
+
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    const socket = getOrCreateSocket(session.user.id);
+
+    const onProgress = ({ fileId, progress, filename }: {
+      fileId: string;
+      progress: number;
+      filename: string;
+    }) => {
+      setUploads((prev) => {
+        const exists = prev.find((u) => u.fileId === fileId);
+        if (exists) {
+          return prev.map((u) =>
+            u.fileId === fileId ? { ...u, progress: Math.round(progress), filename } : u
+          );
+        }
+        return [...prev, { fileId, filename, progress: Math.round(progress), done: false }];
+      });
+    };
+
+    const onDone = ({ fileId, filename }: { fileId: string; filename: string }) => {
+      setUploads((prev) =>
+        prev.map((u) => u.fileId === fileId ? { ...u, progress: 100, done: true } : u)
+      );
+      // 3초 후 자동 제거
+      clearTimeout(timersRef.current[fileId]);
+      timersRef.current[fileId] = setTimeout(() => {
+        setUploads((prev) => prev.filter((u) => u.fileId !== fileId));
+        delete timersRef.current[fileId];
+      }, 3000);
+    };
+
+    socket.on("upload:progress:update", onProgress);
+    socket.on("upload:done:update",     onDone);
+
+    return () => {
+      socket.off("upload:progress:update", onProgress);
+      socket.off("upload:done:update",     onDone);
+    };
+  }, [session?.user?.id]);
+
+  // 언마운트 시 타이머 정리
+  useEffect(() => {
+    return () => {
+      Object.values(timersRef.current).forEach(clearTimeout);
+    };
+  }, []);
+
+  return { uploads };
 }
 </file>
 
@@ -22703,6 +22640,69 @@ export function formatBytes(bytes: bigint | number, decimals = 2) {
     parseFloat((Number(b) / Math.pow(1024, i)).toFixed(dm)) + " " + sizes[i]
   );
 }
+</file>
+
+<file path="src/pages/api/socket/io.ts">
+// src/pages/api/socket/io.ts
+// ✅ 개선판: initSocketServer를 사용하여 실제 WebRTC 시그널링 처리
+// 기존 레거시 파일은 WebRTC 이벤트가 없어 통화 기능이 작동하지 않았음
+
+import { Server as NetServer } from "http";
+import { NextApiRequest, NextApiResponse } from "next";
+import { Socket } from "net";
+import { Server as SocketIOServer } from "socket.io";
+import { initSocketServer } from "@/lib/socket-server";
+
+export type NextApiResponseServerIo = NextApiResponse & {
+  socket: Socket & {
+    server: NetServer & {
+      io: SocketIOServer;
+    };
+  };
+};
+
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+const ioHandler = (req: NextApiRequest, res: NextApiResponseServerIo) => {
+  if (!res.socket.server.io) {
+    console.log("🔌 Socket.IO 서버 초기화 중...");
+
+    const httpServer: NetServer = res.socket.server as any;
+    const io = new SocketIOServer(httpServer, {
+      path: "/api/socket/io",
+      addTrailingSlash: false,
+      pingTimeout: 60000,
+      pingInterval: 25000,
+      cors: {
+        origin:
+          process.env.NEXTAUTH_URL ||
+          process.env.NEXT_PUBLIC_APP_URL ||
+          "*",
+        methods: ["GET", "POST"],
+        credentials: true,
+      },
+      // 대용량 메시지 허용 (파일 공유 등)
+      maxHttpBufferSize: 1e7, // 10MB
+    });
+
+    // ✅ 핵심: initSocketServer를 통해 WebRTC + 채팅 + 알림 이벤트 등록
+    initSocketServer(io);
+
+    // 전역 io 저장 (emitToUser 등에서 사용)
+    (global as any).io = io;
+    res.socket.server.io = io;
+
+    console.log("✅ Socket.IO 서버 초기화 완료");
+  }
+
+  res.end();
+};
+
+export default ioHandler;
 </file>
 
 <file path="tailwind.config.js">
@@ -38128,6 +38128,170 @@ export async function PATCH(request: NextRequest) {
 }
 </file>
 
+<file path="src/lib/activity-log.ts">
+// src/lib/activity-log.ts
+import { prisma } from "@/lib/db";
+import { NextRequest } from "next/server";
+import { Prisma } from "@prisma/client";
+
+type ActivityAction =
+  | "FILE_UPLOAD" | "FILE_DELETE" | "FILE_DOWNLOAD" | "FILE_SHARE"
+  | "FOLDER_CREATE" | "FOLDER_DELETE"
+  | "POST_CREATE" | "POST_DELETE"
+  | "COMMENT_CREATE" | "COMMENT_DELETE"
+  | "PROFILE_UPDATE" | "PASSWORD_CHANGE"
+  | "LOGIN" | "LOGOUT"
+  | "CHAT_MESSAGE" | "CALL_START" | "CALL_END";
+
+interface LogActivityInput {
+  userId:   string;
+  action:   ActivityAction;
+  target?:  string;
+  targetId?: string;
+  request?: NextRequest;
+  extra?:   Record<string, unknown>;
+}
+
+export async function logActivity(input: LogActivityInput) {
+  try {
+    const meta: Record<string, unknown> = { ...(input.extra ?? {}) };
+    if (input.request) {
+      meta.ip = input.request.headers.get("x-forwarded-for")
+             ?? input.request.headers.get("x-real-ip")
+             ?? "unknown";
+      meta.ua = input.request.headers.get("user-agent")?.slice(0, 120);
+    }
+
+    await prisma.activityLog.create({
+      data: {
+        userId:   input.userId,
+        action:   input.action,
+        target:   input.target,
+        targetId: input.targetId,
+        // ✅ Prisma.InputJsonValue 에러를 해결하기 위해 any로 캐스팅
+        meta: Object.keys(meta).length
+          ? (meta as any) 
+          : undefined,
+      },
+    });
+  } catch (err) {
+    console.error("logActivity error:", err);
+  }
+}
+</file>
+
+<file path="src/lib/emit-notification.ts">
+// src/lib/emit-notification.ts
+import { prisma } from "@/lib/db";
+
+type NotificationType = "COMMENT" | "SHARE" | "CHAT" | "SYSTEM" | "FILE_UPLOAD" | "CALL";
+
+interface EmitNotificationParams {
+  title: string;
+  message: string;
+  type: NotificationType;
+  link?: string;
+  metadata?: any;
+}
+
+export async function emitNotification(
+  userId: string,
+  params: EmitNotificationParams
+) {
+  try {
+    // 1. DB에 알림 저장
+    const notification = await prisma.notification.create({
+      data: {
+        userId,
+        title:    params.title,
+        message:  params.message,
+        type:     params.type,
+        link:     params.link,
+        metadata: params.metadata || {},
+        isRead:   false,   // ✅ 수정: read → isRead (스키마 필드명)
+      },
+    });
+
+    // 2. 실시간 소켓 전송
+    const io = (global as any).io;
+    if (io) {
+      io.to(`user:${userId}`).emit("notification:new", notification);
+    } else {
+      console.warn(`[Notification] global.io 없음 — userId=${userId} DB만 저장`);
+    }
+
+    return notification;
+  } catch (error) {
+    console.error("emitNotification error:", error);
+    return null;
+  }
+}
+</file>
+
+<file path="Dockerfile">
+FROM node:20-bookworm-slim AS deps
+WORKDIR /app
+RUN apt-get update && apt-get install -y \
+    openssl \
+    ca-certificates \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM node:20-bookworm-slim AS builder
+WORKDIR /app
+RUN apt-get update && apt-get install -y \
+    openssl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+
+FROM node:20-bookworm-slim AS runner
+WORKDIR /app
+RUN apt-get update && apt-get install -y \
+    openssl \
+    ca-certificates \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system --gid 1001 nodejs \
+    && useradd --system --uid 1001 --gid nodejs nextjs
+
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+
+# ✅ 핵심: 커스텀 server.js 복사 (standalone의 기본 server.js를 덮어씀)
+COPY --from=builder /app/server.js ./server.js
+
+RUN mkdir -p \
+    /app/storage/files \
+    /app/storage/thumbnails \
+    /app/storage/optimized \
+    /app/storage/avatars \
+    /app/storage/covers \
+    /app/storage/versions \
+    /app/logs \
+    && chown -R nextjs:nodejs /app
+
+USER nextjs
+
+ENV PORT=3000
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+
+CMD ["node", "server.js"]
+</file>
+
 <file path="src/app/globals.css">
 /* src/app/globals.css */
 /* ✅ 개선판: MobileBottomNav의 safe-area-padding-bottom, pb-safe 누락 수정 */
@@ -38372,195 +38536,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
     </SessionProvider>
   );
 }
-</file>
-
-<file path="src/lib/activity-log.ts">
-// src/lib/activity-log.ts
-import { prisma } from "@/lib/db";
-import { NextRequest } from "next/server";
-import { Prisma } from "@prisma/client";
-
-type ActivityAction =
-  | "FILE_UPLOAD" | "FILE_DELETE" | "FILE_DOWNLOAD" | "FILE_SHARE"
-  | "FOLDER_CREATE" | "FOLDER_DELETE"
-  | "POST_CREATE" | "POST_DELETE"
-  | "COMMENT_CREATE" | "COMMENT_DELETE"
-  | "PROFILE_UPDATE" | "PASSWORD_CHANGE"
-  | "LOGIN" | "LOGOUT"
-  | "CHAT_MESSAGE" | "CALL_START" | "CALL_END";
-
-interface LogActivityInput {
-  userId:   string;
-  action:   ActivityAction;
-  target?:  string;
-  targetId?: string;
-  request?: NextRequest;
-  extra?:   Record<string, unknown>;
-}
-
-export async function logActivity(input: LogActivityInput) {
-  try {
-    const meta: Record<string, unknown> = { ...(input.extra ?? {}) };
-    if (input.request) {
-      meta.ip = input.request.headers.get("x-forwarded-for")
-             ?? input.request.headers.get("x-real-ip")
-             ?? "unknown";
-      meta.ua = input.request.headers.get("user-agent")?.slice(0, 120);
-    }
-
-    await prisma.activityLog.create({
-      data: {
-        userId:   input.userId,
-        action:   input.action,
-        target:   input.target,
-        targetId: input.targetId,
-        // ✅ Prisma.InputJsonValue 에러를 해결하기 위해 any로 캐스팅
-        meta: Object.keys(meta).length
-          ? (meta as any) 
-          : undefined,
-      },
-    });
-  } catch (err) {
-    console.error("logActivity error:", err);
-  }
-}
-</file>
-
-<file path="src/lib/emit-notification.ts">
-// src/lib/emit-notification.ts
-import { prisma } from "@/lib/db";
-
-type NotificationType = "COMMENT" | "SHARE" | "CHAT" | "SYSTEM" | "FILE_UPLOAD" | "CALL";
-
-interface EmitNotificationParams {
-  title: string;
-  message: string;
-  type: NotificationType;
-  link?: string;
-  metadata?: any;
-}
-
-export async function emitNotification(
-  userId: string,
-  params: EmitNotificationParams
-) {
-  try {
-    // 1. DB에 알림 저장
-    const notification = await prisma.notification.create({
-      data: {
-        userId,
-        title:    params.title,
-        message:  params.message,
-        type:     params.type,
-        link:     params.link,
-        metadata: params.metadata || {},
-        isRead:   false,   // ✅ 수정: read → isRead (스키마 필드명)
-      },
-    });
-
-    // 2. 실시간 소켓 전송
-    const io = (global as any).io;
-    if (io) {
-      io.to(`user:${userId}`).emit("notification:new", notification);
-    } else {
-      console.warn(`[Notification] global.io 없음 — userId=${userId} DB만 저장`);
-    }
-
-    return notification;
-  } catch (error) {
-    console.error("emitNotification error:", error);
-    return null;
-  }
-}
-</file>
-
-<file path="Dockerfile">
-# Dockerfile
-# Multi-stage build (Debian 기반 - Prisma 안정 호환)
-
-# ── Stage 1: Dependencies ─────────────────────
-FROM node:20-bookworm-slim AS deps
-
-WORKDIR /app
-
-# 필요한 기본 패키지 설치
-RUN apt-get update && apt-get install -y \
-    openssl \
-    ca-certificates \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY package.json package-lock.json* ./
-RUN npm ci
-
-# ── Stage 2: Build ───────────────────────────
-FROM node:20-bookworm-slim AS builder
-
-WORKDIR /app
-
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV NODE_ENV=production
-
-# Prisma Client 생성
-RUN npx prisma generate
-
-# Next.js standalone 빌드
-RUN npm run build
-
-# ── Stage 3: Production Runner ───────────────
-FROM node:20-bookworm-slim AS runner
-
-WORKDIR /app
-
-# 최소 런타임 패키지
-RUN apt-get update && apt-get install -y \
-    openssl \
-    ca-certificates \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
-
-# 보안: 비루트 사용자 생성
-RUN groupadd --system --gid 1001 nodejs \
- && useradd  --system --uid 1001 nextjs
-
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-
-# 빌드 결과 복사
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-
-# 스토리지 / 로그 디렉토리 생성
-RUN mkdir -p /app/storage/files \
-             /app/storage/thumbnails \
-             /app/storage/optimized \
-             /app/storage/avatars \
-             /app/storage/covers \
-             /app/storage/versions \
-             /app/logs \
- && chown -R nextjs:nodejs /app
-
-USER nextjs
-
-EXPOSE 3000
-
-ENV PORT=3000
-ENV HOSTNAME=0.0.0.0
-
-# 헬스체크
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD wget -qO- http://localhost:3000/api/health || exit 1
-
-CMD ["node", "server.js"]
 </file>
 
 <file path="src/hooks/useSocket.ts">

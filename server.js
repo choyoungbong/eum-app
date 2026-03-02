@@ -1,17 +1,23 @@
 // server.js
-// Next.js + Socket.IO 통합 커스텀 서버
-// npm run dev  → node server.js
-// npm run start → cross-env NODE_ENV=production tsx server.js
+// ✅ Railway 배포용 커스텀 서버
+// - process.env.PORT 사용 (Railway가 동적으로 주입)
+// - hostname 0.0.0.0 바인딩 (외부 접근 필수)
+// - Socket.IO + WebRTC 시그널링 초기화
 
 const { createServer } = require("http");
 const { parse } = require("url");
 const next = require("next");
-const { Server: SocketIOServer } = require("socket.io");
+const { Server } = require("socket.io");
 
-const dev  = process.env.NODE_ENV !== "production";
+const dev = process.env.NODE_ENV !== "production";
+
+// ✅ Railway가 주입하는 PORT 환경변수 사용 (기본값 3000)
 const port = parseInt(process.env.PORT || "3000", 10);
 
-const app    = next({ dev });
+// ✅ 0.0.0.0 바인딩 필수 — localhost로 하면 Railway 외부 접근 불가
+const hostname = "0.0.0.0";
+
+const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
@@ -20,32 +26,39 @@ app.prepare().then(() => {
     handle(req, res, parsedUrl);
   });
 
-  // ── Socket.IO 초기화 ──────────────────────────────────
-  const io = new SocketIOServer(httpServer, {
+  // ── Socket.IO 서버 초기화 ─────────────────────────────
+  const io = new Server(httpServer, {
     path: "/api/socket/io",
     addTrailingSlash: false,
-    cors: { origin: "*", methods: ["GET", "POST"] },
     pingTimeout: 60000,
     pingInterval: 25000,
-    transports: ["websocket", "polling"],
+    maxHttpBufferSize: 1e7, // 10MB
+    cors: {
+      origin:
+        process.env.NEXTAUTH_URL ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        "*",
+      methods: ["GET", "POST"],
+      credentials: true,
+    },
   });
 
-  // ── global.io 등록 (API route에서 emit 가능하게) ───────
-  global.io = io;
-
-  // ── socket-server 핸들러 연결 ─────────────────────────
-  // TypeScript 파일이면 tsx로 실행되므로 @/ 경로 대신 상대경로 사용
+  // ── WebRTC 시그널링 + 채팅 이벤트 등록 ──────────────
   try {
     const { initSocketServer } = require("./src/lib/socket-server");
     initSocketServer(io);
-    console.log("✅ Socket.IO 핸들러 등록 완료");
-  } catch (e) {
-    console.error("❌ socket-server 로드 실패:", e.message);
-    // 핸들러 없이도 서버는 구동됨
+    console.log("✅ Socket.IO 이벤트 핸들러 등록 완료");
+  } catch (err) {
+    console.error("❌ socket-server 초기화 실패:", err);
   }
 
-  httpServer.listen(port, () => {
-    console.log(`🚀 서버 구동: http://localhost:${port} (${dev ? "dev" : "prod"})`);
-    console.log(`🔌 Socket.IO: http://localhost:${port}/api/socket/io`);
+  // ── 전역 io 저장 (App Router API Route에서 emitToUser 사용) ──
+  global.io = io;
+
+  // ── 서버 시작 ────────────────────────────────────────
+  httpServer.listen(port, hostname, () => {
+    console.log(`✅ 서버 시작: http://${hostname}:${port}`);
+    console.log(`   NODE_ENV: ${process.env.NODE_ENV}`);
+    console.log(`   Socket.IO path: /api/socket/io`);
   });
 });

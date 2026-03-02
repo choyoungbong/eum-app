@@ -1,19 +1,19 @@
 "use client";
 
 import React, { useState, Suspense } from "react";
+import { signIn } from "next-auth/react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Loader2 } from "lucide-react"; // 로딩 아이콘용
+import { Loader2 } from "lucide-react";
 
 function LoginForm() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const searchParams  = useSearchParams();
+  const router        = useRouter();
+  const [email,       setEmail]     = useState("");
+  const [password,    setPassword]  = useState("");
+  const [error,       setError]     = useState("");
+  const [isLoading,   setIsLoading] = useState(false);
 
-  // searchParams가 null일 경우를 대비한 안전한 접근
   const isSignupSuccess = searchParams?.get("signup") === "success";
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -22,18 +22,30 @@ function LoginForm() {
     setIsLoading(true);
 
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-        headers: { "Content-Type": "application/json" },
+      // ✅ 수정: 존재하지 않는 /api/auth/login 대신 NextAuth signIn() 사용
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,   // 직접 결과를 받아서 처리
       });
 
-      if (res.ok) {
-        router.push("/dashboard");
+      if (result?.ok) {
+        // 로그인 성공 → callbackUrl이 있으면 해당 페이지, 없으면 dashboard
+        const callbackUrl = searchParams?.get("callbackUrl") || "/dashboard";
+        router.push(callbackUrl);
         router.refresh();
       } else {
-        const data = await res.json();
-        setError(data.message || "로그인에 실패했습니다.");
+        // NextAuth 에러 코드별 한국어 메시지
+        switch (result?.error) {
+          case "CredentialsSignin":
+            setError("이메일 또는 비밀번호가 올바르지 않습니다.");
+            break;
+          case "AccessDenied":
+            setError("접근이 거부되었습니다.");
+            break;
+          default:
+            setError(result?.error || "로그인에 실패했습니다.");
+        }
       }
     } catch (err) {
       setError("서버 연결에 실패했습니다.");
@@ -58,7 +70,7 @@ function LoginForm() {
               </p>
             </div>
           )}
-          
+
           {error && (
             <div className="p-3 rounded-lg bg-red-50 border border-red-200 dark:bg-red-900/20 dark:border-red-900">
               <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
@@ -67,37 +79,47 @@ function LoginForm() {
 
           <div className="space-y-2">
             <label className="text-sm font-medium dark:text-zinc-200">이메일</label>
-            <input 
-              type="email" 
-              placeholder="name@example.com" 
+            <input
+              type="email"
+              placeholder="name@example.com"
               className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              required 
+              required
             />
           </div>
 
           <div className="space-y-2">
             <label className="text-sm font-medium dark:text-zinc-200">비밀번호</label>
-            <input 
-              type="password" 
+            <input
+              type="password"
               className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              required 
+              required
             />
           </div>
 
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={isLoading}
             className="w-full flex items-center justify-center py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-md font-medium transition-colors"
           >
             {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "로그인"}
           </button>
         </form>
+
+        <div className="mt-4 text-right">
+          <Link href="/find-email" className="text-xs text-gray-500 dark:text-zinc-400 hover:underline">
+            이메일 찾기
+          </Link>
+          {" · "}
+          <Link href="/reset-password" className="text-xs text-gray-500 dark:text-zinc-400 hover:underline">
+            비밀번호 재설정
+          </Link>
+        </div>
       </div>
-      
+
       <div className="px-6 py-4 bg-gray-50 dark:bg-zinc-800/50 border-t dark:border-zinc-800 text-center">
         <p className="text-sm text-gray-500 dark:text-zinc-400">
           계정이 없으신가요?{" "}

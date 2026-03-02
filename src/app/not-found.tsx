@@ -1,9 +1,12 @@
+"use client";
 // src/app/not-found.tsx
-// Next.js 14 App Router 글로벌 404 페이지
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function NotFound() {
+  const router = useRouter();
+
   return (
     <div className="min-h-screen bg-[#0f0c29] flex items-center justify-center px-4">
       {/* 배경 블롭 */}
@@ -43,12 +46,14 @@ export default function NotFound() {
           >
             🏠 대시보드로 이동
           </Link>
-          <Link
-            href="javascript:history.back()"
+
+          {/* ✅ 수정: javascript:history.back() → useRouter().back() */}
+          <button
+            onClick={() => router.back()}
             className="w-full sm:w-auto px-6 py-3 bg-white/5 text-white font-semibold rounded-xl border border-white/10 hover:bg-white/10 transition-all text-sm"
           >
             ← 이전 페이지
-          </Link>
+          </button>
         </div>
 
         <p className="mt-10 text-white/10 text-[10px] font-medium tracking-[0.3em] uppercase">
@@ -58,25 +63,3 @@ export default function NotFound() {
     </div>
   );
 }
-
-// export default function NotFoundPage() {
-//   return (
-//     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-slate-900 px-4">
-//       <div className="text-center space-y-6 max-w-sm">
-//         <p className="text-7xl font-black text-gray-200 dark:text-slate-700">404</p>
-//         <div>
-//           <h1 className="text-xl font-bold text-gray-900 dark:text-slate-100 mb-2">
-//             페이지를 찾을 수 없습니다
-//           </h1>
-//           <p className="text-sm text-gray-500 dark:text-slate-400">
-//             주소가 잘못되었거나 삭제된 페이지입니다.
-//           </p>
-//         </div>
-//         <a href="/dashboard"
-//           className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition">
-//           <Home size={15} /> 대시보드로
-//         </a>
-//       </div>
-//     </div>
-//   );
-// }

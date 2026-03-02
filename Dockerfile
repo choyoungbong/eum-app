@@ -21,6 +21,10 @@ COPY . .
 RUN npx prisma generate
 RUN npm run build
 
+# ✅ socket-server.ts + 의존 파일을 CommonJS JS로 별도 컴파일
+COPY tsconfig.server.json ./tsconfig.server.json
+RUN npx tsc --project tsconfig.server.json || true
+
 FROM node:20-bookworm-slim AS runner
 WORKDIR /app
 RUN apt-get update && apt-get install -y \
@@ -39,8 +43,11 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
 
-# ✅ 핵심: 커스텀 server.js 복사 (standalone의 기본 server.js를 덮어씀)
+# ✅ 커스텀 server.js 복사
 COPY --from=builder /app/server.js ./server.js
+
+# ✅ 컴파일된 서버 모듈 복사 (socket-server.js, db.js, fcm.js)
+COPY --from=builder /app/.next/server-dist ./server-dist
 
 RUN mkdir -p \
     /app/storage/files \

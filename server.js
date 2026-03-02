@@ -10,11 +10,7 @@ const next = require("next");
 const { Server } = require("socket.io");
 
 const dev = process.env.NODE_ENV !== "production";
-
-// ✅ Railway가 주입하는 PORT 환경변수 사용 (기본값 3000)
 const port = parseInt(process.env.PORT || "3000", 10);
-
-// ✅ 0.0.0.0 바인딩 필수 — localhost로 하면 Railway 외부 접근 불가
 const hostname = "0.0.0.0";
 
 const app = next({ dev, hostname, port });
@@ -32,7 +28,7 @@ app.prepare().then(() => {
     addTrailingSlash: false,
     pingTimeout: 60000,
     pingInterval: 25000,
-    maxHttpBufferSize: 1e7, // 10MB
+    maxHttpBufferSize: 1e7,
     cors: {
       origin:
         process.env.NEXTAUTH_URL ||
@@ -44,12 +40,15 @@ app.prepare().then(() => {
   });
 
   // ── WebRTC 시그널링 + 채팅 이벤트 등록 ──────────────
+  // standalone 빌드에서는 src/ 폴더가 없으므로
+  // tsconfig.server.json으로 별도 컴파일된 server-dist/ 경로 사용
   try {
-    const { initSocketServer } = require("./src/lib/socket-server");
+    const { initSocketServer } = require("./server-dist/lib/socket-server");
     initSocketServer(io);
     console.log("✅ Socket.IO 이벤트 핸들러 등록 완료");
   } catch (err) {
-    console.error("❌ socket-server 초기화 실패:", err);
+    console.error("❌ socket-server 초기화 실패:", err.message);
+    // 소켓 서버 없이도 Next.js는 정상 동작 — 서버는 계속 기동
   }
 
   // ── 전역 io 저장 (App Router API Route에서 emitToUser 사용) ──
@@ -58,7 +57,7 @@ app.prepare().then(() => {
   // ── 서버 시작 ────────────────────────────────────────
   httpServer.listen(port, hostname, () => {
     console.log(`✅ 서버 시작: http://${hostname}:${port}`);
-    console.log(`   NODE_ENV: ${process.env.NODE_ENV}`);
-    console.log(`   Socket.IO path: /api/socket/io`);
+    console.log(`   NODE_ENV : ${process.env.NODE_ENV}`);
+    console.log(`   Socket.IO: /api/socket/io`);
   });
 });

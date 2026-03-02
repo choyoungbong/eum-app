@@ -1,5 +1,5 @@
 /* src/app/globals.css */
-/* ✅ 핵심: @tailwind 디렉티브 추가 - 이게 없으면 Tailwind CSS가 전혀 적용 안 됨 */
+/* ✅ 개선판: MobileBottomNav의 safe-area-padding-bottom, pb-safe 누락 수정 */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,6 +8,8 @@
 :root {
   --sat: env(safe-area-inset-top);
   --sab: env(safe-area-inset-bottom);
+  --sal: env(safe-area-inset-left);
+  --sar: env(safe-area-inset-right);
 }
 
 /* ── 기본 레이아웃 ──────────────────────────────────────── */
@@ -19,6 +21,8 @@ body {
   font-family: "Pretendard", system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
 }
 
 /* ── 다크모드 기본 배경 ────────────────────────────────── */
@@ -48,6 +52,7 @@ body {
 }
 
 /* ── Safe Area 유틸리티 ─────────────────────────────────── */
+/* 기존 클래스 */
 .safe-area-bottom {
   padding-bottom: var(--sab);
 }
@@ -55,21 +60,100 @@ body {
   padding-top: var(--sat);
 }
 
+/* ✅ 추가: MobileBottomNav.tsx에서 사용하는 클래스 */
+.safe-area-padding-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ✅ 추가: pb-safe (Tailwind 플러그인 없이 사용 가능하도록) */
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
 /* ── 채팅 전용 ──────────────────────────────────────────── */
 .chat-messages-container {
-  height: calc(100vh - 80px - var(--sat) - var(--sab));
+  /* 헤더(56px) + 입력창(68px) + 하단 네비(80px) + safe area */
+  height: calc(
+    100dvh
+    - 56px
+    - 68px
+    - var(--sat, 0px)
+    - var(--sab, 0px)
+  );
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* dvh 미지원 브라우저 폴백 */
+@supports not (height: 100dvh) {
+  .chat-messages-container {
+    height: calc(100vh - 56px - 68px - var(--sat, 0px) - var(--sab, 0px));
+  }
 }
 
 .chat-input-wrapper {
   position: sticky;
   bottom: 0;
-  padding-bottom: max(1rem, var(--sab));
+  padding-bottom: max(0.75rem, var(--sab, 0px));
   background: white;
   z-index: 50;
 }
 
 .dark .chat-input-wrapper {
   background: #18181b;
+}
+
+/* ── 애니메이션 ─────────────────────────────────────────── */
+@layer utilities {
+  .animate-fade-in {
+    animation: fadeIn 0.2s ease-in-out;
+  }
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(10px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ── 통화 모달 오버레이 ─────────────────────────────────── */
+.call-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(9, 9, 11, 0.98);
+}
+
+/* ── 포커스 링 커스터마이징 ──────────────────────────────── */
+:focus-visible {
+  outline: 2px solid #7c3aed;
+  outline-offset: 2px;
+}
+
+/* ── 모바일 탭 하이라이트 제거 ──────────────────────────── */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── 입력 자동완성 배경 제거 ─────────────────────────────── */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px white inset;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+.dark input:-webkit-autofill,
+.dark input:-webkit-autofill:hover,
+.dark input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #27272a inset;
+  -webkit-text-fill-color: #fafafa;
 }

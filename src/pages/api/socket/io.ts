@@ -1,11 +1,12 @@
-import { Server as NetServer } from "http";
-import { NextApiRequest } from "next";
-import { Server as ServerIO } from "socket.io";
+// src/pages/api/socket/io.ts
+// ✅ 개선판: initSocketServer를 사용하여 실제 WebRTC 시그널링 처리
+// 기존 레거시 파일은 WebRTC 이벤트가 없어 통화 기능이 작동하지 않았음
 
-// 만약 types 파일이 따로 없다면 아래 인터페이스를 상단에 추가하세요
-import { NextApiResponse } from "next";
+import { Server as NetServer } from "http";
+import { NextApiRequest, NextApiResponse } from "next";
 import { Socket } from "net";
 import { Server as SocketIOServer } from "socket.io";
+import { initSocketServer } from "@/lib/socket-server";
 
 export type NextApiResponseServerIo = NextApiResponse & {
   socket: Socket & {
@@ -23,36 +24,34 @@ export const config = {
 
 const ioHandler = (req: NextApiRequest, res: NextApiResponseServerIo) => {
   if (!res.socket.server.io) {
-    const path = "/api/socket/io";
+    console.log("🔌 Socket.IO 서버 초기화 중...");
+
     const httpServer: NetServer = res.socket.server as any;
-    const io = new ServerIO(httpServer, {
-      path: path,
+    const io = new SocketIOServer(httpServer, {
+      path: "/api/socket/io",
       addTrailingSlash: false,
       pingTimeout: 60000,
+      pingInterval: 25000,
       cors: {
-        origin: "*",
+        origin:
+          process.env.NEXTAUTH_URL ||
+          process.env.NEXT_PUBLIC_APP_URL ||
+          "*",
         methods: ["GET", "POST"],
+        credentials: true,
       },
+      // 대용량 메시지 허용 (파일 공유 등)
+      maxHttpBufferSize: 1e7, // 10MB
     });
 
-    io.on("connection", (socket) => {
-      // 룸 조인 및 기본 이벤트
-      socket.on("join-room", (roomId: string) => {
-        socket.join(roomId);
-      });
+    // ✅ 핵심: initSocketServer를 통해 WebRTC + 채팅 + 알림 이벤트 등록
+    initSocketServer(io);
 
-      // 메시지 수신 및 전달
-      socket.on("send-message", (data) => {
-        io.to(data.roomId).emit("receive-message", data);
-      });
-
-      // WebRTC 시그널링
-      socket.on("call-user", (data) => {
-        socket.to(data.to).emit("call-made", { offer: data.offer, socket: socket.id });
-      });
-    });
-
+    // 전역 io 저장 (emitToUser 등에서 사용)
+    (global as any).io = io;
     res.socket.server.io = io;
+
+    console.log("✅ Socket.IO 서버 초기화 완료");
   }
 
   res.end();

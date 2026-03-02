@@ -1,19 +1,12 @@
 // src/lib/socket-client.ts
-// 클라이언트 사이드 소켓 싱글턴 + React 훅
+// ✅ 개선판: 소켓 싱글톤을 hooks/useSocket.ts로 통합
+// useUploadProgress 훅 포함 (UploadProgressOverlay.tsx에서 사용)
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import { io, type Socket } from "socket.io-client";
+"use client";
+
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
-
-// ── 싱글턴 소켓 ──────────────────────────────────────────
-let _socket: Socket | null = null;
-
-export function getSocket(): Socket {
-  if (!_socket) {
-    _socket = io({ path: "/api/socket", transports: ["websocket", "polling"], autoConnect: false });
-  }
-  return _socket;
-}
+import { getOrCreateSocket } from "@/hooks/useSocket";
 
 // ── 전역 소켓 연결 훅 (providers에서 한 번만 사용) ─────────
 export function useSocketConnection() {
@@ -21,10 +14,8 @@ export function useSocketConnection() {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    if (status !== "authenticated") return;
-    const socket = getSocket();
-
-    if (!socket.connected) socket.connect();
+    if (status !== "authenticated" || !session?.user?.id) return;
+    const socket = getOrCreateSocket(session.user.id);
 
     const onConnect    = () => setConnected(true);
     const onDisconnect = () => setConnected(false);
@@ -37,7 +28,7 @@ export function useSocketConnection() {
       socket.off("connect",    onConnect);
       socket.off("disconnect", onDisconnect);
     };
-  }, [status]);
+  }, [status, session?.user?.id]);
 
   return connected;
 }
@@ -46,53 +37,50 @@ export function useSocketConnection() {
 export function useSocketNotifications(
   onNew: (n: { type: string; message: string; createdAt: string }) => void
 ) {
+  const { data: session, status } = useSession();
+
   useEffect(() => {
-    const socket = getSocket();
+    if (status !== "authenticated" || !session?.user?.id) return;
+    const socket = getOrCreateSocket(session.user.id);
     socket.on("notification:new", onNew);
     return () => { socket.off("notification:new", onNew); };
-  }, [onNew]);
+  }, [onNew, status, session?.user?.id]);
 }
 
 // ── 채팅 타이핑 인디케이터 훅 ─────────────────────────────
 interface TypingState {
   [userId: string]: boolean;
 }
+
 export function useTypingIndicator(roomId: string | null) {
+  const { data: session } = useSession();
   const [typingUsers, setTypingUsers] = useState<TypingState>({});
-  const typingTimer = useRef<Record<string, NodeJS.Timeout>>({});
 
   useEffect(() => {
-    if (!roomId) return;
-    const socket = getSocket();
+    if (!roomId || !session?.user?.id) return;
+    const socket = getOrCreateSocket(session.user.id);
     socket.emit("chat:join", roomId);
 
-    const handler = ({ userId, isTyping }: { userId: string; roomId: string; isTyping: boolean }) => {
+    const handler = ({ userId, isTyping }: { userId: string; isTyping: boolean }) => {
       setTypingUsers((prev) => ({ ...prev, [userId]: isTyping }));
-      // 5초 후 자동으로 타이핑 해제
-      if (isTyping) {
-        clearTimeout(typingTimer.current[userId]);
-        typingTimer.current[userId] = setTimeout(() => {
-          setTypingUsers((prev) => ({ ...prev, [userId]: false }));
-        }, 5000);
-      }
     };
 
-    socket.on("chat:typing:update", handler);
+    socket.on("typing:update", handler);
     return () => {
       socket.emit("chat:leave", roomId);
-      socket.off("chat:typing:update", handler);
+      socket.off("typing:update", handler);
     };
-  }, [roomId]);
+  }, [roomId, session?.user?.id]);
 
   const startTyping = useCallback(() => {
-    if (!roomId) return;
-    getSocket().emit("chat:typing:start", { roomId });
-  }, [roomId]);
+    if (!roomId || !session?.user?.id) return;
+    getOrCreateSocket(session.user.id).emit("typing:start", { chatRoomId: roomId });
+  }, [roomId, session?.user?.id]);
 
   const stopTyping = useCallback(() => {
-    if (!roomId) return;
-    getSocket().emit("chat:typing:stop", { roomId });
-  }, [roomId]);
+    if (!roomId || !session?.user?.id) return;
+    getOrCreateSocket(session.user.id).emit("typing:stop", { chatRoomId: roomId });
+  }, [roomId, session?.user?.id]);
 
   const typingUserIds = Object.entries(typingUsers)
     .filter(([, v]) => v)
@@ -101,59 +89,67 @@ export function useTypingIndicator(roomId: string | null) {
   return { typingUserIds, startTyping, stopTyping };
 }
 
-// ── 업로드 진행률 훅 ─────────────────────────────────────
-interface UploadProgress {
+// ── 업로드 진행률 훅 ──────────────────────────────────────
+// UploadProgressOverlay.tsx에서 사용
+interface UploadItem {
   fileId: string;
   filename: string;
   progress: number;
+  done: boolean;
 }
+
 export function useUploadProgress() {
-  const [uploads, setUploads] = useState<Record<string, UploadProgress>>({});
+  const { data: session } = useSession();
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const timersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   useEffect(() => {
-    const socket = getSocket();
-    const onProgress = ({ fileId, filename, progress }: UploadProgress) => {
-      setUploads((prev) => ({ ...prev, [fileId]: { fileId, filename, progress } }));
-    };
-    const onDone = ({ fileId }: { fileId: string }) => {
+    if (!session?.user?.id) return;
+    const socket = getOrCreateSocket(session.user.id);
+
+    const onProgress = ({ fileId, progress, filename }: {
+      fileId: string;
+      progress: number;
+      filename: string;
+    }) => {
       setUploads((prev) => {
-        const next = { ...prev };
-        delete next[fileId];
-        return next;
+        const exists = prev.find((u) => u.fileId === fileId);
+        if (exists) {
+          return prev.map((u) =>
+            u.fileId === fileId ? { ...u, progress: Math.round(progress), filename } : u
+          );
+        }
+        return [...prev, { fileId, filename, progress: Math.round(progress), done: false }];
       });
     };
+
+    const onDone = ({ fileId, filename }: { fileId: string; filename: string }) => {
+      setUploads((prev) =>
+        prev.map((u) => u.fileId === fileId ? { ...u, progress: 100, done: true } : u)
+      );
+      // 3초 후 자동 제거
+      clearTimeout(timersRef.current[fileId]);
+      timersRef.current[fileId] = setTimeout(() => {
+        setUploads((prev) => prev.filter((u) => u.fileId !== fileId));
+        delete timersRef.current[fileId];
+      }, 3000);
+    };
+
     socket.on("upload:progress:update", onProgress);
     socket.on("upload:done:update",     onDone);
+
     return () => {
       socket.off("upload:progress:update", onProgress);
       socket.off("upload:done:update",     onDone);
     };
-  }, []);
+  }, [session?.user?.id]);
 
-  const broadcastProgress = useCallback((fileId: string, filename: string, progress: number) => {
-    getSocket().emit("upload:progress", { fileId, progress, filename });
-    if (progress >= 100) getSocket().emit("upload:done", { fileId, filename });
-  }, []);
-
-  return { uploads: Object.values(uploads), broadcastProgress };
-}
-
-// ── 프레즌스 훅 ──────────────────────────────────────────
-export function usePresence(userIds: string[]) {
-  const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
-
+  // 언마운트 시 타이머 정리
   useEffect(() => {
-    const socket = getSocket();
-    const handler = ({ userId, isOnline }: { userId: string; isOnline: boolean }) => {
-      setOnlineUsers((prev) => {
-        const next = new Set(prev);
-        isOnline ? next.add(userId) : next.delete(userId);
-        return next;
-      });
+    return () => {
+      Object.values(timersRef.current).forEach(clearTimeout);
     };
-    socket.on("presence:update", handler);
-    return () => { socket.off("presence:update", handler); };
   }, []);
 
-  return { isOnline: (userId: string) => onlineUsers.has(userId) };
+  return { uploads };
 }

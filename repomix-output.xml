@@ -5615,6 +5615,161 @@ export default function SearchBar({ onSearch, placeholder = "검색..." }: Searc
 }
 </file>
 
+<file path="src/components/TagInput.tsx">
+"use client";
+
+import { useState, useEffect } from "react";
+import { toast } from "@/components/Toast";
+
+interface Tag { id: string; name: string; color?: string; }
+
+interface TagInputProps {
+  resourceId: string;
+  resourceType: "file" | "post";
+  onTagsChange?: () => void;
+}
+
+export default function TagInput({ resourceId, resourceType, onTagsChange }: TagInputProps) {
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [allTags, setAllTags] = useState<Tag[]>([]);
+  const [inputValue, setInputValue] = useState("");
+  const [suggestions, setSuggestions] = useState<Tag[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetchTags();
+    fetchAllTags();
+  }, [resourceId]);
+
+  const fetchTags = async () => {
+    try {
+      const res = await fetch(`/api/${resourceType}s/${resourceId}/tags`);
+      if (res.ok) setTags((await res.json()).tags || []);
+    } catch {}
+  };
+
+  const fetchAllTags = async () => {
+    try {
+      const res = await fetch("/api/tags");
+      if (res.ok) setAllTags((await res.json()).tags || []);
+    } catch {}
+  };
+
+  const handleAddTag = async (tagName: string) => {
+    if (!tagName.trim()) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/${resourceType}s/${resourceId}/tags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tagName: tagName.trim() }),
+      });
+      if (res.ok) {
+        await fetchTags();
+        setInputValue("");
+        setSuggestions([]);
+        onTagsChange?.();
+      } else {
+        const data = await res.json();
+        // ✅ alert() → toast
+        toast.error(data.error || "태그 추가에 실패했습니다");
+      }
+    } catch {
+      toast.error("태그 추가 중 오류가 발생했습니다");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoveTag = async (tagId: string) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/${resourceType}s/${resourceId}/tags?tagId=${tagId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        await fetchTags();
+        onTagsChange?.();
+      } else {
+        toast.error("태그 제거에 실패했습니다");
+      }
+    } catch {
+      toast.error("태그 제거 중 오류가 발생했습니다");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleInputChange = (value: string) => {
+    setInputValue(value);
+    if (value.trim()) {
+      const filtered = allTags.filter(
+        (tag) =>
+          tag.name.toLowerCase().includes(value.toLowerCase()) &&
+          !tags.some((t) => t.id === tag.id)
+      );
+      setSuggestions(filtered.slice(0, 5));
+    } else {
+      setSuggestions([]);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleAddTag(inputValue);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {tags.map((tag) => (
+          <span
+            key={tag.id}
+            className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-800 text-sm rounded-full"
+          >
+            #{tag.name}
+            <button
+              onClick={() => handleRemoveTag(tag.id)}
+              disabled={loading}
+              className="hover:text-blue-900 disabled:opacity-50"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+
+      <div className="relative">
+        <input
+          type="text"
+          value={inputValue}
+          onChange={(e) => handleInputChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="태그 입력 후 Enter"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+          disabled={loading}
+        />
+        {suggestions.length > 0 && (
+          <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg">
+            {suggestions.map((tag) => (
+              <button
+                key={tag.id}
+                onClick={() => handleAddTag(tag.name)}
+                className="w-full px-3 py-2 text-left hover:bg-gray-100 text-sm text-gray-900"
+              >
+                #{tag.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+</file>
+
 <file path="src/components/UploadProgress.tsx">
 "use client";
 
@@ -17876,161 +18031,6 @@ export default function SystemNoticeBanner() {
       <button onClick={() => setDismissed((s) => new Set([...s, top.id]))} className="opacity-70 hover:opacity-100 transition-opacity">
         <X size={14} />
       </button>
-    </div>
-  );
-}
-</file>
-
-<file path="src/components/TagInput.tsx">
-"use client";
-
-import { useState, useEffect } from "react";
-import { toast } from "@/components/Toast";
-
-interface Tag { id: string; name: string; color?: string; }
-
-interface TagInputProps {
-  resourceId: string;
-  resourceType: "file" | "post";
-  onTagsChange?: () => void;
-}
-
-export default function TagInput({ resourceId, resourceType, onTagsChange }: TagInputProps) {
-  const [tags, setTags] = useState<Tag[]>([]);
-  const [allTags, setAllTags] = useState<Tag[]>([]);
-  const [inputValue, setInputValue] = useState("");
-  const [suggestions, setSuggestions] = useState<Tag[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    fetchTags();
-    fetchAllTags();
-  }, [resourceId]);
-
-  const fetchTags = async () => {
-    try {
-      const res = await fetch(`/api/${resourceType}s/${resourceId}/tags`);
-      if (res.ok) setTags((await res.json()).tags || []);
-    } catch {}
-  };
-
-  const fetchAllTags = async () => {
-    try {
-      const res = await fetch("/api/tags");
-      if (res.ok) setAllTags((await res.json()).tags || []);
-    } catch {}
-  };
-
-  const handleAddTag = async (tagName: string) => {
-    if (!tagName.trim()) return;
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/${resourceType}s/${resourceId}/tags`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tagName: tagName.trim() }),
-      });
-      if (res.ok) {
-        await fetchTags();
-        setInputValue("");
-        setSuggestions([]);
-        onTagsChange?.();
-      } else {
-        const data = await res.json();
-        // ✅ alert() → toast
-        toast.error(data.error || "태그 추가에 실패했습니다");
-      }
-    } catch {
-      toast.error("태그 추가 중 오류가 발생했습니다");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleRemoveTag = async (tagId: string) => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/${resourceType}s/${resourceId}/tags?tagId=${tagId}`, {
-        method: "DELETE",
-      });
-      if (res.ok) {
-        await fetchTags();
-        onTagsChange?.();
-      } else {
-        toast.error("태그 제거에 실패했습니다");
-      }
-    } catch {
-      toast.error("태그 제거 중 오류가 발생했습니다");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleInputChange = (value: string) => {
-    setInputValue(value);
-    if (value.trim()) {
-      const filtered = allTags.filter(
-        (tag) =>
-          tag.name.toLowerCase().includes(value.toLowerCase()) &&
-          !tags.some((t) => t.id === tag.id)
-      );
-      setSuggestions(filtered.slice(0, 5));
-    } else {
-      setSuggestions([]);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleAddTag(inputValue);
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-2">
-        {tags.map((tag) => (
-          <span
-            key={tag.id}
-            className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-800 text-sm rounded-full"
-          >
-            #{tag.name}
-            <button
-              onClick={() => handleRemoveTag(tag.id)}
-              disabled={loading}
-              className="hover:text-blue-900 disabled:opacity-50"
-            >
-              ×
-            </button>
-          </span>
-        ))}
-      </div>
-
-      <div className="relative">
-        <input
-          type="text"
-          value={inputValue}
-          onChange={(e) => handleInputChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="태그 입력 후 Enter"
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
-          disabled={loading}
-        />
-        {suggestions.length > 0 && (
-          <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg">
-            {suggestions.map((tag) => (
-              <button
-                key={tag.id}
-                onClick={() => handleAddTag(tag.name)}
-                className="w-full px-3 py-2 text-left hover:bg-gray-100 text-sm text-gray-900"
-              >
-                #{tag.name}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -38474,77 +38474,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
 }
 </file>
 
-<file path="Dockerfile">
-FROM node:20-bookworm-slim AS deps
-WORKDIR /app
-RUN apt-get update && apt-get install -y \
-    openssl \
-    ca-certificates \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-COPY package.json package-lock.json* ./
-RUN npm ci
-
-FROM node:20-bookworm-slim AS builder
-WORKDIR /app
-RUN apt-get update && apt-get install -y \
-    openssl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-RUN npx prisma generate
-RUN npm run build
-
-# ✅ socket-server.ts + 의존 파일을 CommonJS JS로 별도 컴파일
-COPY tsconfig.server.json ./tsconfig.server.json
-RUN npx tsc --project tsconfig.server.json || true
-
-FROM node:20-bookworm-slim AS runner
-WORKDIR /app
-RUN apt-get update && apt-get install -y \
-    openssl \
-    ca-certificates \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN groupadd --system --gid 1001 nodejs \
-    && useradd --system --uid 1001 --gid nodejs nextjs
-
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-
-# ✅ 커스텀 server.js 복사
-COPY --from=builder /app/server.js ./server.js
-
-# ✅ 컴파일된 서버 모듈 복사 (socket-server.js, db.js, fcm.js)
-COPY --from=builder /app/.next/server-dist ./server-dist
-
-RUN mkdir -p \
-    /app/storage/files \
-    /app/storage/thumbnails \
-    /app/storage/optimized \
-    /app/storage/avatars \
-    /app/storage/covers \
-    /app/storage/versions \
-    /app/logs \
-    && chown -R nextjs:nodejs /app
-
-USER nextjs
-
-ENV PORT=3000
-ENV NODE_ENV=production
-ENV HOSTNAME=0.0.0.0
-
-CMD ["node", "server.js"]
-</file>
-
 <file path="src/hooks/useSocket.ts">
 "use client";
 // src/hooks/useSocket.ts
@@ -39015,6 +38944,72 @@ export function useChatRoom(chatRoomId: string | null) {
     toggleCamera,
   };
 }
+</file>
+
+<file path="Dockerfile">
+FROM node:20-bookworm-slim AS deps
+WORKDIR /app
+RUN apt-get update && apt-get install -y \
+    openssl \
+    ca-certificates \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM node:20-bookworm-slim AS builder
+WORKDIR /app
+RUN apt-get update && apt-get install -y \
+    openssl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+
+FROM node:20-bookworm-slim AS runner
+WORKDIR /app
+RUN apt-get update && apt-get install -y \
+    openssl \
+    ca-certificates \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system --gid 1001 nodejs \
+    && useradd --system --uid 1001 --gid nodejs nextjs
+
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+
+# ✅ 핵심: 소켓 로직이 인라인된 순수 JS server.js
+# tsx, tsc, @/ alias 모두 불필요 — node로 직접 실행
+COPY --from=builder /app/server.js ./server.js
+
+RUN mkdir -p \
+    /app/storage/files \
+    /app/storage/thumbnails \
+    /app/storage/optimized \
+    /app/storage/avatars \
+    /app/storage/covers \
+    /app/storage/versions \
+    /app/logs \
+    && chown -R nextjs:nodejs /app
+
+USER nextjs
+
+ENV PORT=3000
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+
+# ✅ tsx 불필요 — 순수 node로 실행
+CMD ["node", "server.js"]
 </file>
 
 <file path="src/lib/socket-server.ts">

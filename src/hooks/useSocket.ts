@@ -24,7 +24,7 @@ export function getOrCreateSocket(userId: string): Socket {
   const socket = io(typeof window !== "undefined" ? window.location.origin : "", {
     path: "/api/socket/io",
     auth: { userId },
-    transports: ["websocket"],
+    transports: ["websocket", "polling"],
     reconnection: true,
     reconnectionAttempts: 10,
     reconnectionDelay: 1500,

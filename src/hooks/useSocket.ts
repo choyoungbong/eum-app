@@ -12,8 +12,8 @@ let _socket: Socket | null = null;
 let _userId: string | null = null;
 
 export function getOrCreateSocket(userId: string): Socket {
-  // 이미 같은 유저로 연결 중이거나 연결된 소켓이 있으면 재사용
-  if (_socket && _userId === userId && (_socket.connected || _socket.io._reconnecting)) {
+  // 🔒 reconnect 상태든 아니든 같은 유저면 무조건 재사용
+  if (_socket && _userId === userId) {
     return _socket;
   }
   if (_socket) {

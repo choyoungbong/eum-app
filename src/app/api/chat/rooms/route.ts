@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
             },
             messages: {
               orderBy: { createdAt: "desc" },
-              take: 1, // 마지막 메시지만
+              take: 1,
               include: {
                 sender: {
                   select: {
@@ -45,11 +45,6 @@ export async function GET(request: NextRequest) {
                     name: true,
                   },
                 },
-              },
-            },
-            _count: {
-              select: {
-                messages: true,
               },
             },
           },
@@ -62,30 +57,39 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // 읽지 않은 메시지 개수 계산
-    const chatRooms = await Promise.all(
-      chatRoomMembers.map(async (member: any) => {
-        const unreadCount = await prisma.chatMessage.count({
-          where: {
-            chatRoomId: member.chatRoomId,
-            createdAt: {
-              gt: member.lastReadAt || new Date(0),
-            },
-            senderId: {
-              not: session.user.id, // 본인 메시지 제외
-            },
-          },
-        });
+    const roomIds = chatRoomMembers.map(m => m.chatRoomId);
 
-        return {
-          ...member.chatRoom,
-          unreadCount,
-          myMembership: {
-            lastReadAt: member.lastReadAt,
-          },
-        };
-      })
-    );
+    // ✅ unreadCount를 한 번에 집계
+    const unreadCounts = await prisma.chatMessage.groupBy({
+      by: ["chatRoomId"],
+      where: {
+        chatRoomId: { in: roomIds },
+        senderId: { not: session.user.id },
+      },
+      _count: {
+        _all: true,
+      },
+    });
+
+    const unreadMap: Record<string, number> = {};
+    unreadCounts.forEach(u => {
+      unreadMap[u.chatRoomId] = u._count._all;
+    });
+
+    const chatRooms = chatRoomMembers.map((member: any) => {
+      const lastRead = member.lastReadAt || new Date(0);
+
+      const unreadCount =
+        unreadMap[member.chatRoomId] || 0;
+
+      return {
+        ...member.chatRoom,
+        unreadCount,
+        myMembership: {
+          lastReadAt: member.lastReadAt,
+        },
+      };
+    });
 
     return NextResponse.json({ chatRooms });
   } catch (error) {

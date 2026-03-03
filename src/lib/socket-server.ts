@@ -175,7 +175,7 @@ export function initSocketServer(io: SocketIOServer) {
         await prisma.call
           .updateMany({
             where: { initiatorId: callerId, receiverId: userId, status: "PENDING" },
-            data: { status: "ACCEPTED", startedAt: new Date() },
+            data: { status: "ACTIVE", startedAt: new Date() },
           })
           .catch(() => {});
         emitToUser(callerId, "call:accepted", { answer });
@@ -206,7 +206,7 @@ export function initSocketServer(io: SocketIOServer) {
         const call = await prisma.call
           .findFirst({
             where: {
-              status: { in: ["PENDING", "ACTIVE", "ACCEPTED"] },
+              status: { in: ["PENDING", "ACTIVE"] },
               OR: [
                 { initiatorId: userId, receiverId: otherUserId },
                 { initiatorId: otherUserId, receiverId: userId },

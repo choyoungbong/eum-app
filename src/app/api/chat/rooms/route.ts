@@ -1,12 +1,20 @@
+// src/app/api/chat/rooms/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 // 채팅방 목록 조회
 export async function GET(request: NextRequest) {
+  const apiStart = Date.now();
+
   try {
+    // 🔹 Session 측정
+    const sessionStart = Date.now();
     const session = await getServerSession(authOptions);
+    console.log("Session time:", Date.now() - sessionStart, "ms");
+
     if (!session?.user) {
       return NextResponse.json(
         { error: "인증이 필요합니다" },
@@ -14,7 +22,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 내가 참여한 채팅방 목록
+    // 🔹 채팅방 멤버 조회
+    const dbMemberStart = Date.now();
     const chatRoomMembers = await prisma.chatRoomMember.findMany({
       where: {
         userId: session.user.id,
@@ -56,10 +65,16 @@ export async function GET(request: NextRequest) {
         },
       },
     });
+    console.log(
+      "DB chatRoomMember time:",
+      Date.now() - dbMemberStart,
+      "ms"
+    );
 
-    const roomIds = chatRoomMembers.map(m => m.chatRoomId);
+    const roomIds = chatRoomMembers.map((m) => m.chatRoomId);
 
-    // ✅ unreadCount를 한 번에 집계
+    // 🔹 unread 집계
+    const unreadStart = Date.now();
     const unreadCounts = await prisma.chatMessage.groupBy({
       by: ["chatRoomId"],
       where: {
@@ -70,17 +85,15 @@ export async function GET(request: NextRequest) {
         _all: true,
       },
     });
+    console.log("Unread groupBy time:", Date.now() - unreadStart, "ms");
 
     const unreadMap: Record<string, number> = {};
-    unreadCounts.forEach(u => {
+    unreadCounts.forEach((u) => {
       unreadMap[u.chatRoomId] = u._count._all;
     });
 
     const chatRooms = chatRoomMembers.map((member: any) => {
-      const lastRead = member.lastReadAt || new Date(0);
-
-      const unreadCount =
-        unreadMap[member.chatRoomId] || 0;
+      const unreadCount = unreadMap[member.chatRoomId] || 0;
 
       return {
         ...member.chatRoom,
@@ -91,151 +104,15 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    console.log("API total time:", Date.now() - apiStart, "ms");
+
     return NextResponse.json({ chatRooms });
   } catch (error) {
     console.error("Chat rooms fetch error:", error);
+    console.log("API total time (error):", Date.now() - apiStart, "ms");
+
     return NextResponse.json(
       { error: "채팅방 조회 중 오류가 발생했습니다" },
-      { status: 500 }
-    );
-  }
-}
-
-// 채팅방 생성
-export async function POST(request: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json(
-        { error: "인증이 필요합니다" },
-        { status: 401 }
-      );
-    }
-
-    const body = await request.json();
-    const { type, memberIds, name } = body;
-
-    // 유효성 검사
-    if (!type || !memberIds || !Array.isArray(memberIds)) {
-      return NextResponse.json(
-        { error: "잘못된 요청입니다" },
-        { status: 400 }
-      );
-    }
-
-    // 1:1 채팅인 경우 기존 채팅방 확인
-    if (type === "DIRECT") {
-      if (memberIds.length !== 1) {
-        return NextResponse.json(
-          { error: "1:1 채팅은 상대방 1명만 지정해야 합니다" },
-          { status: 400 }
-        );
-      }
-
-      const otherUserId = memberIds[0];
-
-      // 이미 존재하는 1:1 채팅방 찾기
-      const existingChatRoom = await prisma.chatRoom.findFirst({
-        where: {
-          type: "DIRECT",
-          members: {
-            every: {
-              userId: {
-                in: [session.user.id, otherUserId],
-              },
-            },
-          },
-        },
-        include: {
-          members: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                  isOnline: true,
-                },
-              },
-            },
-          },
-        },
-      });
-
-      if (existingChatRoom) {
-        return NextResponse.json({
-          message: "기존 채팅방을 반환합니다",
-          chatRoom: existingChatRoom,
-        });
-      }
-    }
-
-    // 그룹 채팅인 경우 이름 필수
-    if (type === "GROUP" && !name) {
-      return NextResponse.json(
-        { error: "그룹 채팅방 이름을 입력하세요" },
-        { status: 400 }
-      );
-    }
-
-    // 채팅방 생성
-    const chatRoom = await prisma.chatRoom.create({
-      data: {
-        type,
-        name: type === "GROUP" ? name : null,
-        members: {
-          create: [
-            // 본인 추가
-            {
-              userId: session.user.id,
-            },
-            // 다른 멤버들 추가
-            ...memberIds.map((userId: string) => ({
-              userId,
-            })),
-          ],
-        },
-      },
-      include: {
-        members: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                isOnline: true,
-                lastSeenAt: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    // 시스템 메시지 생성 (그룹 채팅)
-    if (type === "GROUP") {
-      await prisma.chatMessage.create({
-        data: {
-          chatRoomId: chatRoom.id,
-          senderId: session.user.id,
-          type: "SYSTEM",
-          content: `${session.user.name}님이 채팅방을 만들었습니다.`,
-        },
-      });
-    }
-
-    return NextResponse.json(
-      {
-        message: "채팅방이 생성되었습니다",
-        chatRoom,
-      },
-      { status: 201 }
-    );
-  } catch (error) {
-    console.error("Chat room create error:", error);
-    return NextResponse.json(
-      { error: "채팅방 생성 중 오류가 발생했습니다" },
       { status: 500 }
     );
   }

@@ -393,8 +393,15 @@ export function useChatRoom(chatRoomId: string | null) {
           callType,
           offer: pc.localDescription,
         });
-      } catch {
-        alert("카메라/마이크 접근 실패\n브라우저 설정에서 권한을 허용해주세요");
+      } catch (err: any) {
+        console.error("🔥 initiateCall ERROR:", err);
+      
+        alert(
+          "통화 시작 오류\n\n" +
+          "이름: " + err?.name + "\n" +
+          "메시지: " + err?.message
+        );
+      
         cleanupCall();
         setCallStatus("idle");
       }
@@ -433,8 +440,15 @@ export function useChatRoom(chatRoomId: string | null) {
         answer: pc.localDescription,
       });
       setIncomingCall(null);
-    } catch {
-      alert("카메라/마이크 접근 실패\n브라우저 설정에서 권한을 허용해주세요");
+    } catch (err: any) {
+      console.error("🔥 initiateCall ERROR:", err);
+    
+      alert(
+        "통화 시작 오류\n\n" +
+        "이름: " + err?.name + "\n" +
+        "메시지: " + err?.message
+      );
+    
       cleanupCall();
       setCallStatus("idle");
     }

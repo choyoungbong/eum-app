@@ -48,19 +48,14 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   {
-    urls: "turn:openrelay.metered.ca:80",
-    username: "openrelayproject",
-    credential: "openrelayproject",
+    urls: "turn:global.turn.metered.ca:80",
+    username: process.env.NEXT_PUBLIC_TURN_USER!,
+    credential: process.env.NEXT_PUBLIC_TURN_PASS!,
   },
   {
-    urls: "turn:openrelay.metered.ca:443",
-    username: "openrelayproject",
-    credential: "openrelayproject",
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443?transport=tcp",
-    username: "openrelayproject",
-    credential: "openrelayproject",
+    urls: "turn:global.turn.metered.ca:443?transport=tcp",
+    username: process.env.NEXT_PUBLIC_TURN_USER!,
+    credential: process.env.NEXT_PUBLIC_TURN_PASS!,
   },
 ];
 
@@ -233,22 +228,49 @@ export function useChatRoom(chatRoomId: string | null) {
       };
 
       pc.oniceconnectionstatechange = () => {
-        const s = pc.iceConnectionState;
-        if (s === "connected" || s === "completed") setCallStatus("connected");
-        if (s === "failed") {
-          cleanupCall();
-          setCallStatus("idle");
+        const state = pc.iceConnectionState;
+        console.log("ICE state:", state);
+      
+        if (state === "connected" || state === "completed") {
+          setCallStatus("connected");
+        }
+      
+        // 🔥 failed 시 바로 종료하지 말고 restart
+        if (state === "failed") {
+          console.log("ICE failed → restartIce()");
+          try {
+            pc.restartIce();
+          } catch (e) {
+            console.error("ICE restart error:", e);
+          }
+        }
+      
+        // 🔥 disconnected는 5초 유예
+        if (state === "disconnected") {
+          setTimeout(() => {
+            if (pc.iceConnectionState === "disconnected") {
+              console.log("ICE still disconnected → cleanup");
+              cleanupCall();
+              setCallStatus("idle");
+            }
+          }, 5000);
         }
       };
 
-      pc.ontrack = (e) => {
-        if (e.streams?.[0]) {
-          setRemoteStream(e.streams[0]);
-        } else {
-          const ms = new MediaStream();
-          ms.addTrack(e.track);
-          setRemoteStream(ms);
-        }
+      pc.ontrack = (event) => {
+        console.log("Remote track received");
+      
+        setRemoteStream((prev) => {
+          const stream = prev ?? new MediaStream();
+          event.streams.forEach((s) => {
+            s.getTracks().forEach((track) => {
+              if (!stream.getTracks().some(t => t.id === track.id)) {
+                stream.addTrack(track);
+              }
+            });
+          });
+          return stream;
+        });
       };
 
       pcRef.current = pc;

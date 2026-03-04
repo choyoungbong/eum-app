@@ -244,6 +244,38 @@ export default function ChatRoomPage() {
   const isVideoCall = currentCallType === "VIDEO";
   const isInCall    = ["calling", "connected", "incoming", "ended"].includes(callStatus);
 
+  const handleCall = (type: "VOICE" | "VIDEO") => {
+    if (!chatRoom) {
+      alert("채팅방 정보가 아직 로드되지 않았습니다.");
+      return;
+    }
+  
+    if (!isDirect) {
+      alert("1:1 채팅에서만 통화할 수 있습니다.");
+      return;
+    }
+  
+    const other = chatRoom.members?.find(
+      (m: any) => m.user?.id !== session?.user?.id
+    );
+  
+    if (!other?.user?.id) {
+      console.error("❌ 상대 유저 찾기 실패", chatRoom.members);
+      alert("상대 유저 정보를 찾을 수 없습니다.");
+      return;
+    }
+  
+    if (other.user.id === session?.user?.id) {
+      alert("자기 자신에게는 통화할 수 없습니다.");
+      return;
+    }
+  
+    console.log("📞 통화 시도:", type, "상대:", other.user.id);
+  
+    setCurrentCallType(type);
+    initiateCall(type, other.user.id);
+  };
+
   return (
     <div className="flex flex-col h-screen h-[100dvh] bg-gray-50 dark:bg-zinc-950 overflow-hidden">
 
@@ -290,10 +322,7 @@ export default function ChatRoomPage() {
         {callStatus === "idle" && isDirect && otherMember && (
           <div className="flex gap-2">
             <button
-              onClick={() => {
-                setCurrentCallType("VOICE");
-                initiateCall("VOICE", otherMember.user.id);
-              }}
+              onClick={() => handleCall("VOICE")}
               title="음성 통화"
               className="w-9 h-9 rounded-full bg-green-500 hover:bg-green-600 flex items-center justify-center text-white shadow active:scale-90 transition-all"
             >
@@ -302,10 +331,7 @@ export default function ChatRoomPage() {
               </svg>
             </button>
             <button
-              onClick={() => {
-                setCurrentCallType("VIDEO");
-                initiateCall("VIDEO", otherMember.user.id);
-              }}
+              onClick={() => handleCall("VIDEO")}
               title="영상 통화"
               className="w-9 h-9 rounded-full bg-blue-500 hover:bg-blue-600 flex items-center justify-center text-white shadow active:scale-90 transition-all"
             >

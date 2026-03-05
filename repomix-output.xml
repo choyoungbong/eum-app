@@ -39275,6 +39275,602 @@ export function initSocketServer(io: SocketIOServer) {
 }
 </file>
 
+<file path="prisma/schema.prisma">
+// prisma/schema.prisma
+// 전체 완성본 — 기존 파일을 이것으로 교체하세요
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ────────────────────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum ResourceType {
+  FILE
+  FOLDER
+  POST
+  CHATROOM   // 기존 데이터 보존
+}
+
+enum Permission {
+  VIEW
+  EDIT
+  ADMIN      // 기존 데이터 보존
+}
+
+enum Visibility {
+  PUBLIC
+  PRIVATE
+  SHARED
+}
+
+enum ChatRoomType {
+  DIRECT
+  GROUP
+}
+
+enum MessageType {
+  TEXT
+  FILE
+  SYSTEM
+  CALL
+  CALL_LOG   // 기존 데이터 보존
+}
+
+enum CallStatus {
+  PENDING
+  ACTIVE
+  ENDED
+  MISSED
+  ACCEPTED   // 기존 데이터 보존
+  REJECTED   // 기존 데이터 보존
+}
+
+enum CallType {
+  VOICE
+  VIDEO
+}
+
+enum NetworkType {
+  OFFLINE
+  WIFI
+  CELLULAR
+}
+
+enum NotificationType {
+  COMMENT
+  SHARE
+  CHAT
+  SYSTEM
+  FILE_UPLOAD
+  CALL
+}
+
+enum ActivityAction {
+  FILE_UPLOAD
+  FILE_DELETE
+  FILE_DOWNLOAD
+  FILE_SHARE
+  FOLDER_CREATE
+  FOLDER_DELETE
+  POST_CREATE
+  POST_DELETE
+  COMMENT_CREATE
+  COMMENT_DELETE
+  PROFILE_UPDATE
+  PASSWORD_CHANGE
+  LOGIN
+  LOGOUT
+  CHAT_MESSAGE
+  CALL_START
+  CALL_END
+}
+
+// ── Models ───────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  name          String
+  role          Role      @default(USER)
+  emailVerified Boolean   @default(false) @map("email_verified")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  isOnline      Boolean     @default(false) @map("is_online")
+  lastSeenAt    DateTime?   @map("last_seen_at")
+  fcmToken      String?     @map("fcm_token")
+  notificationPrefs Json?   @map("notification_prefs")
+  twoFactorEnabled  Boolean @default(false) @map("two_factor_enabled")
+  twoFactorSecret   String? @map("two_factor_secret")
+  twoFactorBackups  String[] @map("two_factor_backups")
+  networkType   NetworkType @default(OFFLINE) @map("network_type")
+
+  // 스토리지
+  storageUsed   BigInt  @default(0)          @map("storage_used")
+  storageLimit  BigInt  @default(5368709120) @map("storage_limit")
+
+  // 계정 상태
+  isBanned      Boolean   @default(false) @map("is_banned")
+  banReason     String?   @map("ban_reason")
+  bannedAt      DateTime? @map("banned_at")
+
+  // 온보딩
+  onboardingDone Boolean @default(false) @map("onboarding_done")
+
+  // 프로필 이미지
+  avatarUrl     String? @map("avatar_url")
+  coverUrl      String? @map("cover_url")
+
+  // 관계
+  files                File[]
+  folders              Folder[]
+  posts                Post[]
+  comments             Comment[]
+  sharedResources      SharedResource[] @relation("SharedWith")
+  ownedSharedResources SharedResource[] @relation("Owner")
+  savedSearches        SavedSearch[]
+  chatRoomMembers      ChatRoomMember[]
+  sentMessages         ChatMessage[]
+  callsInitiated       Call[] @relation("CallInitiator")
+  callsReceived        Call[] @relation("CallReceiver")
+  passwordResetTokens  PasswordResetToken[]
+  notifications        Notification[]
+  emailVerificationTokens EmailVerificationToken[]
+  activityLogs         ActivityLog[]
+  following            Follow[] @relation("Follower")
+  followers            Follow[] @relation("Following")
+  postLikes            PostLike[]
+  postBookmarks        PostBookmark[]
+  sessions             UserSession[]
+  apiKeys              ApiKey[]
+  fileVersions         FileVersion[]
+
+  @@map("users")
+}
+
+model ChatRoom {
+  id        String       @id @default(cuid())
+  name      String?
+  type      ChatRoomType @default(DIRECT)
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  members  ChatRoomMember[]
+  messages ChatMessage[]
+  calls    Call[]
+
+  @@map("chat_rooms")
+}
+
+model ChatRoomMember {
+  id         String    @id @default(cuid())
+  chatRoomId String    @map("chat_room_id")
+  userId     String    @map("user_id")
+  joinedAt   DateTime  @default(now()) @map("joined_at")
+  lastReadAt DateTime? @map("last_read_at")
+
+  chatRoom ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([chatRoomId, userId])
+  @@index([chatRoomId])
+  @@index([userId])
+  @@map("chat_room_members")
+}
+
+model ChatMessage {
+  id         String      @id @default(cuid())
+  chatRoomId String      @map("chat_room_id")
+  senderId   String      @map("sender_id")
+  type       MessageType @default(TEXT)
+  content    String?
+  fileId     String?     @map("file_id")
+  callId     String?     @map("call_id")
+  createdAt  DateTime    @default(now()) @map("created_at")
+
+  chatRoom ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  sender   User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  file     File?    @relation(fields: [fileId], references: [id], onDelete: SetNull)
+
+  @@index([chatRoomId])
+  @@index([senderId])
+  @@index([createdAt])
+  @@index([chatRoomId, createdAt(sort: Desc)])
+  @@map("chat_messages")
+}
+
+model Call {
+  id          String     @id @default(cuid())
+  chatRoomId  String     @map("chat_room_id")
+  initiatorId String     @map("initiator_id")
+  receiverId  String     @map("receiver_id")
+  type        CallType   @default(VOICE)
+  status      CallStatus @default(PENDING)
+  startedAt   DateTime?  @map("started_at")
+  endedAt     DateTime?  @map("ended_at")
+  duration    Int?
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  chatRoom  ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  initiator User     @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  receiver  User     @relation("CallReceiver",  fields: [receiverId],  references: [id], onDelete: Cascade)
+
+  @@index([chatRoomId])
+  @@index([initiatorId])
+  @@index([receiverId])
+  @@index([status])
+  @@map("calls")
+}
+
+model Folder {
+  id        String   @id @default(cuid())
+  name      String
+  parentId  String?  @map("parent_id")
+  userId    String   @map("user_id")
+  color     String?
+  icon      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent   Folder?  @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children Folder[] @relation("FolderHierarchy")
+  files    File[]
+
+  @@index([userId])
+  @@index([parentId])
+  @@map("folders")
+}
+
+model File {
+  id              String    @id @default(cuid())
+  filename        String
+  originalName    String    @map("original_name")
+  filepath        String
+  size            BigInt
+  mimeType        String    @map("mime_type")
+  hash            String?   @unique
+  thumbnailUrl    String?   @map("thumbnail_url")
+  transcodeStatus String?   @default("PENDING") @map("transcode_status")
+  transcodeJobId  String?   @map("transcode_job_id")
+  transcodedPaths Json?     @map("transcoded_paths")
+  userId          String    @map("user_id")
+  folderId        String?   @map("folder_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  // 공개 공유
+  publicToken   String?  @unique @map("public_token")
+
+  // 휴지통
+  deletedAt     DateTime? @map("deleted_at")
+
+  // 암호화
+  encryptedKey  String?  @map("encrypted_key")
+  isEncrypted   Boolean  @default(false) @map("is_encrypted")
+
+  // 즐겨찾기 / 핀
+  isStarred     Boolean  @default(false) @map("is_starred")
+  isPinned      Boolean  @default(false) @map("is_pinned")
+
+  // 관계
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder       Folder?      @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  fileTags     FileTag[]
+  chatMessages ChatMessage[]
+  fileVersions FileVersion[]
+
+  @@index([userId])
+  @@index([folderId])
+  @@index([userId, deletedAt])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, isStarred])
+  @@index([userId, isPinned])
+  @@index([publicToken])
+  @@index([hash])
+  @@map("files")
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  fileTags FileTag[]
+  postTags PostTag[]
+
+  @@map("tags")
+}
+
+model FileTag {
+  id        String   @id @default(cuid())
+  fileId    String   @map("file_id")
+  tagId     String   @map("tag_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, tagId])
+  @@index([fileId])
+  @@index([tagId])
+  @@map("file_tags")
+}
+
+model PostTag {
+  id        String   @id @default(cuid())
+  postId    String   @map("post_id")
+  tagId     String   @map("tag_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, tagId])
+  @@index([postId])
+  @@index([tagId])
+  @@map("post_tags")
+}
+
+model SavedSearch {
+  id        String   @id @default(cuid())
+  name      String
+  query     Json
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("saved_searches")
+}
+
+model Post {
+  id         String     @id @default(cuid())
+  title      String
+  content    String
+  visibility Visibility @default(PRIVATE)
+  userId     String     @map("user_id")
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comments  Comment[]
+  postTags  PostTag[]
+  likes     PostLike[]
+  bookmarks PostBookmark[]
+
+  @@index([userId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([visibility, createdAt(sort: Desc)])
+  @@map("posts")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@index([userId])
+  @@map("comments")
+}
+
+model SharedResource {
+  id           String       @id @default(cuid())
+  resourceType ResourceType
+  resourceId   String       @map("resource_id")
+  ownerId      String       @map("owner_id")
+  sharedWithId String       @map("shared_with_id")
+  permission   Permission   @default(VIEW)
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  owner      User @relation("Owner",      fields: [ownerId],      references: [id], onDelete: Cascade)
+  sharedWith User @relation("SharedWith", fields: [sharedWithId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceType, resourceId, sharedWithId])
+  @@index([ownerId])
+  @@index([sharedWithId])
+  @@index([resourceType, resourceId])
+  @@map("shared_resources")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_reset_tokens")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String           @map("user_id")
+  type      NotificationType @default(SYSTEM)
+  title     String
+  message   String
+  body      String?
+  link      String?
+  metadata  Json?
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@index([userId, isRead])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("email_verification_tokens")
+}
+
+model ActivityLog {
+  id        String         @id @default(cuid())
+  userId    String         @map("user_id")
+  action    ActivityAction
+  target    String?
+  targetId  String?        @map("target_id")
+  meta      Json?
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt(sort: Desc)])
+  @@index([action])
+  @@map("activity_logs")
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String   @map("follower_id")
+  followingId String   @map("following_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  follower  User @relation("Follower",  fields: [followerId],  references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+  @@map("follows")
+}
+
+model PostLike {
+  id        String   @id @default(cuid())
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([postId])
+  @@index([userId])
+  @@map("post_likes")
+}
+
+model PostBookmark {
+  id        String   @id @default(cuid())
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([postId])
+  @@index([userId])
+  @@map("post_bookmarks")
+}
+
+model UserSession {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  token      String   @unique
+  userAgent  String?  @map("user_agent")
+  ip         String?
+  lastActive DateTime @default(now()) @map("last_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("user_sessions")
+}
+
+model FileVersion {
+  id         String   @id @default(cuid())
+  fileId     String   @map("file_id")
+  versionNum Int      @map("version_num")
+  filepath   String
+  size       BigInt
+  createdBy  String   @map("created_by")
+  comment    String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([fileId])
+  @@index([fileId, versionNum(sort: Desc)])
+  @@map("file_versions")
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  name       String
+  keyHash    String    @unique @map("key_hash")
+  keyPrefix  String    @map("key_prefix")
+  scopes     String[]
+  lastUsedAt DateTime? @map("last_used_at")
+  expiresAt  DateTime? @map("expires_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("api_keys")
+}
+
+model SystemNotice {
+  id        String    @id @default(cuid())
+  title     String
+  content   String
+  type      String    @default("INFO")
+  isActive  Boolean   @default(true) @map("is_active")
+  startsAt  DateTime? @map("starts_at")
+  endsAt    DateTime? @map("ends_at")
+  createdBy String    @map("created_by")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([isActive])
+  @@map("system_notices")
+}
+</file>
+
 <file path="src/app/chat/[id]/page.tsx">
 "use client";
 // src/app/chat/[id]/page.tsx
@@ -39975,602 +40571,6 @@ export default function ChatRoomPage() {
 }
 </file>
 
-<file path="prisma/schema.prisma">
-// prisma/schema.prisma
-// 전체 완성본 — 기존 파일을 이것으로 교체하세요
-
-generator client {
-  provider      = "prisma-client-js"
-  binaryTargets = ["native", "debian-openssl-3.0.x"]
-}
-
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-// ── Enums ────────────────────────────────────────────────
-
-enum Role {
-  USER
-  ADMIN
-}
-
-enum ResourceType {
-  FILE
-  FOLDER
-  POST
-  CHATROOM   // 기존 데이터 보존
-}
-
-enum Permission {
-  VIEW
-  EDIT
-  ADMIN      // 기존 데이터 보존
-}
-
-enum Visibility {
-  PUBLIC
-  PRIVATE
-  SHARED
-}
-
-enum ChatRoomType {
-  DIRECT
-  GROUP
-}
-
-enum MessageType {
-  TEXT
-  FILE
-  SYSTEM
-  CALL
-  CALL_LOG   // 기존 데이터 보존
-}
-
-enum CallStatus {
-  PENDING
-  ACTIVE
-  ENDED
-  MISSED
-  ACCEPTED   // 기존 데이터 보존
-  REJECTED   // 기존 데이터 보존
-}
-
-enum CallType {
-  VOICE
-  VIDEO
-}
-
-enum NetworkType {
-  OFFLINE
-  WIFI
-  CELLULAR
-}
-
-enum NotificationType {
-  COMMENT
-  SHARE
-  CHAT
-  SYSTEM
-  FILE_UPLOAD
-  CALL
-}
-
-enum ActivityAction {
-  FILE_UPLOAD
-  FILE_DELETE
-  FILE_DOWNLOAD
-  FILE_SHARE
-  FOLDER_CREATE
-  FOLDER_DELETE
-  POST_CREATE
-  POST_DELETE
-  COMMENT_CREATE
-  COMMENT_DELETE
-  PROFILE_UPDATE
-  PASSWORD_CHANGE
-  LOGIN
-  LOGOUT
-  CHAT_MESSAGE
-  CALL_START
-  CALL_END
-}
-
-// ── Models ───────────────────────────────────────────────
-
-model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  passwordHash  String    @map("password_hash")
-  name          String
-  role          Role      @default(USER)
-  emailVerified Boolean   @default(false) @map("email_verified")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
-
-  isOnline      Boolean     @default(false) @map("is_online")
-  lastSeenAt    DateTime?   @map("last_seen_at")
-  fcmToken      String?     @map("fcm_token")
-  notificationPrefs Json?   @map("notification_prefs")
-  twoFactorEnabled  Boolean @default(false) @map("two_factor_enabled")
-  twoFactorSecret   String? @map("two_factor_secret")
-  twoFactorBackups  String[] @map("two_factor_backups")
-  networkType   NetworkType @default(OFFLINE) @map("network_type")
-
-  // 스토리지
-  storageUsed   BigInt  @default(0)          @map("storage_used")
-  storageLimit  BigInt  @default(5368709120) @map("storage_limit")
-
-  // 계정 상태
-  isBanned      Boolean   @default(false) @map("is_banned")
-  banReason     String?   @map("ban_reason")
-  bannedAt      DateTime? @map("banned_at")
-
-  // 온보딩
-  onboardingDone Boolean @default(false) @map("onboarding_done")
-
-  // 프로필 이미지
-  avatarUrl     String? @map("avatar_url")
-  coverUrl      String? @map("cover_url")
-
-  // 관계
-  files                File[]
-  folders              Folder[]
-  posts                Post[]
-  comments             Comment[]
-  sharedResources      SharedResource[] @relation("SharedWith")
-  ownedSharedResources SharedResource[] @relation("Owner")
-  savedSearches        SavedSearch[]
-  chatRoomMembers      ChatRoomMember[]
-  sentMessages         ChatMessage[]
-  callsInitiated       Call[] @relation("CallInitiator")
-  callsReceived        Call[] @relation("CallReceiver")
-  passwordResetTokens  PasswordResetToken[]
-  notifications        Notification[]
-  emailVerificationTokens EmailVerificationToken[]
-  activityLogs         ActivityLog[]
-  following            Follow[] @relation("Follower")
-  followers            Follow[] @relation("Following")
-  postLikes            PostLike[]
-  postBookmarks        PostBookmark[]
-  sessions             UserSession[]
-  apiKeys              ApiKey[]
-  fileVersions         FileVersion[]
-
-  @@map("users")
-}
-
-model ChatRoom {
-  id        String       @id @default(cuid())
-  name      String?
-  type      ChatRoomType @default(DIRECT)
-  createdAt DateTime     @default(now()) @map("created_at")
-  updatedAt DateTime     @updatedAt @map("updated_at")
-
-  members  ChatRoomMember[]
-  messages ChatMessage[]
-  calls    Call[]
-
-  @@map("chat_rooms")
-}
-
-model ChatRoomMember {
-  id         String    @id @default(cuid())
-  chatRoomId String    @map("chat_room_id")
-  userId     String    @map("user_id")
-  joinedAt   DateTime  @default(now()) @map("joined_at")
-  lastReadAt DateTime? @map("last_read_at")
-
-  chatRoom ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([chatRoomId, userId])
-  @@index([chatRoomId])
-  @@index([userId])
-  @@map("chat_room_members")
-}
-
-model ChatMessage {
-  id         String      @id @default(cuid())
-  chatRoomId String      @map("chat_room_id")
-  senderId   String      @map("sender_id")
-  type       MessageType @default(TEXT)
-  content    String?
-  fileId     String?     @map("file_id")
-  callId     String?     @map("call_id")
-  createdAt  DateTime    @default(now()) @map("created_at")
-
-  chatRoom ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
-  sender   User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
-  file     File?    @relation(fields: [fileId], references: [id], onDelete: SetNull)
-
-  @@index([chatRoomId])
-  @@index([senderId])
-  @@index([createdAt])
-  @@index([chatRoomId, createdAt(sort: Desc)])
-  @@map("chat_messages")
-}
-
-model Call {
-  id          String     @id @default(cuid())
-  chatRoomId  String     @map("chat_room_id")
-  initiatorId String     @map("initiator_id")
-  receiverId  String     @map("receiver_id")
-  type        CallType   @default(VOICE)
-  status      CallStatus @default(PENDING)
-  startedAt   DateTime?  @map("started_at")
-  endedAt     DateTime?  @map("ended_at")
-  duration    Int?
-  createdAt   DateTime   @default(now()) @map("created_at")
-
-  chatRoom  ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
-  initiator User     @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
-  receiver  User     @relation("CallReceiver",  fields: [receiverId],  references: [id], onDelete: Cascade)
-
-  @@index([chatRoomId])
-  @@index([initiatorId])
-  @@index([receiverId])
-  @@index([status])
-  @@map("calls")
-}
-
-model Folder {
-  id        String   @id @default(cuid())
-  name      String
-  parentId  String?  @map("parent_id")
-  userId    String   @map("user_id")
-  color     String?
-  icon      String?
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  parent   Folder?  @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
-  children Folder[] @relation("FolderHierarchy")
-  files    File[]
-
-  @@index([userId])
-  @@index([parentId])
-  @@map("folders")
-}
-
-model File {
-  id              String    @id @default(cuid())
-  filename        String
-  originalName    String    @map("original_name")
-  filepath        String
-  size            BigInt
-  mimeType        String    @map("mime_type")
-  hash            String?   @unique
-  thumbnailUrl    String?   @map("thumbnail_url")
-  transcodeStatus String?   @default("PENDING") @map("transcode_status")
-  transcodeJobId  String?   @map("transcode_job_id")
-  transcodedPaths Json?     @map("transcoded_paths")
-  userId          String    @map("user_id")
-  folderId        String?   @map("folder_id")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
-
-  // 공개 공유
-  publicToken   String?  @unique @map("public_token")
-
-  // 휴지통
-  deletedAt     DateTime? @map("deleted_at")
-
-  // 암호화
-  encryptedKey  String?  @map("encrypted_key")
-  isEncrypted   Boolean  @default(false) @map("is_encrypted")
-
-  // 즐겨찾기 / 핀
-  isStarred     Boolean  @default(false) @map("is_starred")
-  isPinned      Boolean  @default(false) @map("is_pinned")
-
-  // 관계
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  folder       Folder?      @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  fileTags     FileTag[]
-  chatMessages ChatMessage[]
-  fileVersions FileVersion[]
-
-  @@index([userId])
-  @@index([folderId])
-  @@index([userId, deletedAt])
-  @@index([userId, createdAt(sort: Desc)])
-  @@index([userId, isStarred])
-  @@index([userId, isPinned])
-  @@index([publicToken])
-  @@index([hash])
-  @@map("files")
-}
-
-model Tag {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  color     String?
-  createdAt DateTime @default(now()) @map("created_at")
-
-  fileTags FileTag[]
-  postTags PostTag[]
-
-  @@map("tags")
-}
-
-model FileTag {
-  id        String   @id @default(cuid())
-  fileId    String   @map("file_id")
-  tagId     String   @map("tag_id")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
-  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
-
-  @@unique([fileId, tagId])
-  @@index([fileId])
-  @@index([tagId])
-  @@map("file_tags")
-}
-
-model PostTag {
-  id        String   @id @default(cuid())
-  postId    String   @map("post_id")
-  tagId     String   @map("tag_id")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
-
-  @@unique([postId, tagId])
-  @@index([postId])
-  @@index([tagId])
-  @@map("post_tags")
-}
-
-model SavedSearch {
-  id        String   @id @default(cuid())
-  name      String
-  query     Json
-  userId    String   @map("user_id")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("saved_searches")
-}
-
-model Post {
-  id         String     @id @default(cuid())
-  title      String
-  content    String
-  visibility Visibility @default(PRIVATE)
-  userId     String     @map("user_id")
-  createdAt  DateTime   @default(now()) @map("created_at")
-  updatedAt  DateTime   @updatedAt @map("updated_at")
-
-  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  comments  Comment[]
-  postTags  PostTag[]
-  likes     PostLike[]
-  bookmarks PostBookmark[]
-
-  @@index([userId])
-  @@index([userId, createdAt(sort: Desc)])
-  @@index([visibility, createdAt(sort: Desc)])
-  @@map("posts")
-}
-
-model Comment {
-  id        String   @id @default(cuid())
-  content   String
-  postId    String   @map("post_id")
-  userId    String   @map("user_id")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([postId])
-  @@index([userId])
-  @@map("comments")
-}
-
-model SharedResource {
-  id           String       @id @default(cuid())
-  resourceType ResourceType
-  resourceId   String       @map("resource_id")
-  ownerId      String       @map("owner_id")
-  sharedWithId String       @map("shared_with_id")
-  permission   Permission   @default(VIEW)
-  createdAt    DateTime     @default(now()) @map("created_at")
-
-  owner      User @relation("Owner",      fields: [ownerId],      references: [id], onDelete: Cascade)
-  sharedWith User @relation("SharedWith", fields: [sharedWithId], references: [id], onDelete: Cascade)
-
-  @@unique([resourceType, resourceId, sharedWithId])
-  @@index([ownerId])
-  @@index([sharedWithId])
-  @@index([resourceType, resourceId])
-  @@map("shared_resources")
-}
-
-model PasswordResetToken {
-  id        String   @id @default(cuid())
-  userId    String   @unique
-  token     String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("password_reset_tokens")
-}
-
-model Notification {
-  id        String           @id @default(cuid())
-  userId    String           @map("user_id")
-  type      NotificationType @default(SYSTEM)
-  title     String
-  message   String
-  body      String?
-  link      String?
-  metadata  Json?
-  isRead    Boolean          @default(false) @map("is_read")
-  createdAt DateTime         @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([isRead])
-  @@index([createdAt])
-  @@index([userId, isRead])
-  @@index([userId, createdAt(sort: Desc)])
-  @@map("notifications")
-}
-
-model EmailVerificationToken {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")
-  token     String   @unique
-  expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([token])
-  @@map("email_verification_tokens")
-}
-
-model ActivityLog {
-  id        String         @id @default(cuid())
-  userId    String         @map("user_id")
-  action    ActivityAction
-  target    String?
-  targetId  String?        @map("target_id")
-  meta      Json?
-  createdAt DateTime       @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([createdAt(sort: Desc)])
-  @@index([action])
-  @@map("activity_logs")
-}
-
-model Follow {
-  id          String   @id @default(cuid())
-  followerId  String   @map("follower_id")
-  followingId String   @map("following_id")
-  createdAt   DateTime @default(now()) @map("created_at")
-
-  follower  User @relation("Follower",  fields: [followerId],  references: [id], onDelete: Cascade)
-  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
-
-  @@unique([followerId, followingId])
-  @@index([followerId])
-  @@index([followingId])
-  @@map("follows")
-}
-
-model PostLike {
-  id        String   @id @default(cuid())
-  postId    String   @map("post_id")
-  userId    String   @map("user_id")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([postId, userId])
-  @@index([postId])
-  @@index([userId])
-  @@map("post_likes")
-}
-
-model PostBookmark {
-  id        String   @id @default(cuid())
-  postId    String   @map("post_id")
-  userId    String   @map("user_id")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([postId, userId])
-  @@index([postId])
-  @@index([userId])
-  @@map("post_bookmarks")
-}
-
-model UserSession {
-  id         String   @id @default(cuid())
-  userId     String   @map("user_id")
-  token      String   @unique
-  userAgent  String?  @map("user_agent")
-  ip         String?
-  lastActive DateTime @default(now()) @map("last_active")
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([token])
-  @@map("user_sessions")
-}
-
-model FileVersion {
-  id         String   @id @default(cuid())
-  fileId     String   @map("file_id")
-  versionNum Int      @map("version_num")
-  filepath   String
-  size       BigInt
-  createdBy  String   @map("created_by")
-  comment    String?
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [createdBy], references: [id], onDelete: Cascade)
-
-  @@index([fileId])
-  @@index([fileId, versionNum(sort: Desc)])
-  @@map("file_versions")
-}
-
-model ApiKey {
-  id         String    @id @default(cuid())
-  userId     String    @map("user_id")
-  name       String
-  keyHash    String    @unique @map("key_hash")
-  keyPrefix  String    @map("key_prefix")
-  scopes     String[]
-  lastUsedAt DateTime? @map("last_used_at")
-  expiresAt  DateTime? @map("expires_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("api_keys")
-}
-
-model SystemNotice {
-  id        String    @id @default(cuid())
-  title     String
-  content   String
-  type      String    @default("INFO")
-  isActive  Boolean   @default(true) @map("is_active")
-  startsAt  DateTime? @map("starts_at")
-  endsAt    DateTime? @map("ends_at")
-  createdBy String    @map("created_by")
-  createdAt DateTime  @default(now()) @map("created_at")
-
-  @@index([isActive])
-  @@map("system_notices")
-}
-</file>
-
 <file path="src/hooks/useSocket.ts">
 "use client";
 // src/hooks/useSocket.ts
@@ -40621,6 +40621,17 @@ export function getSocket(): Socket | null {
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
+
+  {
+    urls: "turn:openrelay.metered.ca:80",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
 ];
 
 // ── 통화 착신음 유틸 ──────────────────────────────────────

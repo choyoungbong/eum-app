@@ -47,16 +47,6 @@ export function getSocket(): Socket | null {
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
-  {
-    urls: "turn:global.turn.metered.ca:80",
-    username: process.env.NEXT_PUBLIC_TURN_USER!,
-    credential: process.env.NEXT_PUBLIC_TURN_PASS!,
-  },
-  {
-    urls: "turn:global.turn.metered.ca:443?transport=tcp",
-    username: process.env.NEXT_PUBLIC_TURN_USER!,
-    credential: process.env.NEXT_PUBLIC_TURN_PASS!,
-  },
 ];
 
 // ── 통화 착신음 유틸 ──────────────────────────────────────

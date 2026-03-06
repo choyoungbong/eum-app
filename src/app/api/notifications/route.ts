@@ -1,82 +1,132 @@
+// src/app/api/notifications/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { Prisma } from "@prisma/client";
 
-// 1. 알림 설정 인터페이스
-interface NotificationPreferences {
-  pushEnabled: boolean;
-  comment: boolean;
-  share: boolean;
-  chat: boolean;
-  system: boolean;
-  fileUpload: boolean;
-  marketing: boolean;
-}
-
-// 2. 기본값 설정
-const DEFAULT_PREFS: NotificationPreferences = {
-  pushEnabled: true,
-  comment: true,
-  share: true,
-  chat: true,
-  system: true,
-  fileUpload: true,
-  marketing: false,
-};
-
-// [GET] 설정 조회
-export async function GET() {
+// ─── GET /api/notifications ───────────────────────────────
+export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: session.user.id },
-      select: { notificationPrefs: true },
-    });
+    const { searchParams } = new URL(request.url);
+    const page       = Math.max(1, parseInt(searchParams.get("page")  || "1"));
+    const limit      = Math.min(100, parseInt(searchParams.get("limit") || "30")); // ✅ 최대 100 제한
+    const onlyUnread = searchParams.get("unread") === "true";
+    const skip       = (page - 1) * limit;
 
-    /**
-     * [빌드 에러 해결 핵심]
-     * TypeScript가 'JsonValue'와 'NotificationPreferences'가 겹치지 않는다고 에러를 내므로,
-     * 아예 'any' 타입 변수에 담아서 타입 검사기(Linter)를 완전히 통과시킵니다.
-     */
-    const rawData: any = user?.notificationPrefs;
-    const prefs = rawData || DEFAULT_PREFS;
+    // ✅ 수정: where 타입을 any 대신 Prisma 타입으로
+    const where: Prisma.NotificationWhereInput = { userId: session.user.id };
+    if (onlyUnread) where.isRead = false;
 
-    return NextResponse.json({ 
-      prefs: { ...DEFAULT_PREFS, ...prefs } 
+    const [notifications, total, unreadCount] = await Promise.all([
+      prisma.notification.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+      }),
+      prisma.notification.count({ where }),
+      prisma.notification.count({
+        where: { userId: session.user.id, isRead: false },
+      }),
+    ]);
+
+    return NextResponse.json({
+      notifications,
+      unreadCount,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
     });
   } catch (error) {
-    console.error("GET /api/notifications/preferences error:", error);
-    return NextResponse.json({ error: "설정을 불러오지 못했습니다" }, { status: 500 });
+    console.error("GET /api/notifications error:", error);
+    return NextResponse.json(
+      { error: "알림을 불러오는 중 오류가 발생했습니다" },
+      { status: 500 }
+    );
   }
 }
 
-// [POST] 설정 저장
-export async function POST(request: NextRequest) {
+// ─── PATCH /api/notifications ─────────────────────────────
+// body 없음 → 전체 읽음 처리
+// body { ids: string[] } → 선택한 알림만 읽음 처리
+export async function PATCH(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
-    const body = await request.json();
-    const { prefs } = body;
+    // ✅ 추가: 특정 id 배열이 오면 해당 알림만 읽음 처리
+    let ids: string[] | undefined;
+    try {
+      const body = await request.json();
+      if (Array.isArray(body?.ids) && body.ids.length > 0) ids = body.ids;
+    } catch {
+      // body 없는 요청도 허용
+    }
 
-    // 업데이트 시에도 'any'로 캐스팅하여 타입 충돌 방지
-    await prisma.user.update({
-      where: { id: session.user.id },
-      data: {
-        notificationPrefs: prefs as any,
-      },
+    const where: Prisma.NotificationWhereInput = {
+      userId: session.user.id,
+      isRead: false,
+      ...(ids ? { id: { in: ids } } : {}),
+    };
+
+    const { count } = await prisma.notification.updateMany({
+      where,
+      data: { isRead: true },
     });
 
-    return NextResponse.json({ message: "알림 설정이 저장되었습니다" });
+    return NextResponse.json({
+      message: `${count}개의 알림을 읽음 처리했습니다`,
+      count,
+    });
   } catch (error) {
-    console.error("POST /api/notifications/preferences error:", error);
-    return NextResponse.json({ error: "설정 저장 중 오류가 발생했습니다" }, { status: 500 });
+    console.error("PATCH /api/notifications error:", error);
+    return NextResponse.json({ error: "서버 오류가 발생했습니다" }, { status: 500 });
+  }
+}
+
+// ─── DELETE /api/notifications ────────────────────────────
+// body 없음 → 전체 삭제
+// body { ids: string[] } → 선택한 알림만 삭제
+export async function DELETE(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
+    }
+
+    // ✅ 추가: 특정 id 배열이 오면 해당 알림만 삭제
+    let ids: string[] | undefined;
+    try {
+      const body = await request.json();
+      if (Array.isArray(body?.ids) && body.ids.length > 0) ids = body.ids;
+    } catch {
+      // body 없는 요청도 허용
+    }
+
+    const where: Prisma.NotificationWhereInput = {
+      userId: session.user.id,
+      ...(ids ? { id: { in: ids } } : {}),
+    };
+
+    const { count } = await prisma.notification.deleteMany({ where });
+
+    return NextResponse.json({
+      message: `${count}개의 알림을 삭제했습니다`,
+      count,
+    });
+  } catch (error) {
+    console.error("DELETE /api/notifications error:", error);
+    return NextResponse.json({ error: "서버 오류가 발생했습니다" }, { status: 500 });
   }
 }

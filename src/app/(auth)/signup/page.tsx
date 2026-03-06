@@ -3,100 +3,232 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { Mail, Lock, User, Eye, EyeOff, Cloud, AlertCircle, Loader2, ChevronRight, CheckCircle2 } from "lucide-react";
 
 export default function SignupPage() {
   const router = useRouter();
-  const [formData, setFormData] = useState({ name: "", email: "", password: "" });
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // 유효성 체크
+  const passwordRules = {
+    length: password.length >= 8,
+    combo: /(?=.*[a-zA-Z])(?=.*\d)/.test(password),
+  };
+  const passwordMatch = passwordConfirm.length > 0 && password === passwordConfirm;
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setLoading(true);
 
+    if (!passwordRules.length || !passwordRules.combo) {
+      setError("비밀번호는 8자 이상, 영문+숫자 조합이어야 합니다.");
+      return;
+    }
+    if (!passwordMatch) {
+      setError("비밀번호가 일치하지 않습니다.");
+      return;
+    }
+
+    setLoading(true);
     try {
-      const res = await fetch("/api/auth/signup", {
+      // ✅ 수정: /api/auth/signup → /api/auth/register (실제 존재하는 엔드포인트)
+      const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({ name, email, password }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "회원가입에 실패했습니다");
-        setLoading(false);
+        setError(data.error || "회원가입에 실패했습니다.");
         return;
       }
-      // ✅ alert() 제거 → 로그인 페이지가 ?signup=success 쿼리 처리
       router.push("/login?signup=success");
     } catch {
-      setError("서버 오류가 발생했습니다");
+      setError("서버 오류가 발생했습니다.");
+    } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">☁️ Personal Cloud</h2>
-          <p className="mt-2 text-center text-sm text-gray-600">새 계정 만들기</p>
+    <div className="min-h-screen bg-[#0f0c29] text-white flex items-center justify-center p-6 relative overflow-hidden">
+      {/* 배경 장식 */}
+      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-600/20 blur-[100px] rounded-full pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/20 blur-[100px] rounded-full pointer-events-none" />
+
+      <div className="max-w-md w-full relative z-10">
+        {/* 로고 */}
+        <div className="text-center mb-8 flex flex-col items-center">
+          <Link href="/" className="inline-flex items-center gap-3 group">
+            <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-blue-600 rounded-2xl flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform">
+              <Cloud size={28} fill="currentColor" />
+            </div>
+            <div className="text-left">
+              <h1 className="text-3xl font-black tracking-tighter italic leading-none">EUM</h1>
+              <p className="text-[10px] text-white/40 uppercase tracking-[0.2em] font-bold mt-1">Personal Cloud</p>
+            </div>
+          </Link>
         </div>
 
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+        {/* 카드 */}
+        <div className="bg-white/5 border border-white/10 p-8 rounded-[40px] backdrop-blur-2xl shadow-2xl">
+          <div className="mb-6">
+            <h2 className="text-2xl font-bold mb-1">회원가입</h2>
+            <p className="text-white/50 text-sm">이음의 새 가족이 되어주세요 ✨</p>
+          </div>
+
           {error && (
-            <div className="rounded-md bg-red-50 p-4">
-              <p className="text-sm text-red-800">{error}</p>
+            <div className="mb-5 flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-2xl text-sm">
+              <AlertCircle size={18} className="shrink-0" />
+              <p>{error}</p>
             </div>
           )}
 
-          <div className="rounded-md shadow-sm -space-y-px">
-            <div>
-              <label htmlFor="name" className="sr-only">이름</label>
-              <input
-                id="name" type="text" required
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                placeholder="이름"
-              />
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* 이름 */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-white/40 ml-1 uppercase tracking-wider">Name</label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-4 flex items-center text-white/20 group-focus-within:text-purple-400 transition-colors pointer-events-none">
+                  <User size={18} />
+                </div>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="홍길동"
+                  required
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-white placeholder:text-white/25 outline-none focus:border-purple-500/50 focus:bg-white/10 transition-all"
+                />
+              </div>
             </div>
-            <div>
-              <label htmlFor="email" className="sr-only">이메일</label>
-              <input
-                id="email" type="email" required
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                placeholder="이메일 주소"
-              />
-            </div>
-            <div>
-              <label htmlFor="password" className="sr-only">비밀번호</label>
-              <input
-                id="password" type="password" required
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                placeholder="비밀번호 (최소 8자)"
-              />
-            </div>
-          </div>
 
-          <button
-            type="submit" disabled={loading}
-            className="w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400"
-          >
-            {loading ? "처리 중..." : "회원가입"}
-          </button>
+            {/* 이메일 */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-white/40 ml-1 uppercase tracking-wider">Email</label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-4 flex items-center text-white/20 group-focus-within:text-purple-400 transition-colors pointer-events-none">
+                  <Mail size={18} />
+                </div>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="example@email.com"
+                  required
+                  className={`w-full bg-white/5 border rounded-2xl py-3.5 pl-12 pr-4 text-white placeholder:text-white/25 outline-none focus:bg-white/10 transition-all ${
+                    email && !emailValid
+                      ? "border-red-500/50 focus:border-red-500/70"
+                      : email && emailValid
+                      ? "border-emerald-500/50 focus:border-emerald-500/70"
+                      : "border-white/10 focus:border-purple-500/50"
+                  }`}
+                />
+              </div>
+            </div>
 
-          <div className="text-center">
-            <p className="text-sm text-gray-600">
+            {/* 비밀번호 */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-white/40 ml-1 uppercase tracking-wider">Password</label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-4 flex items-center text-white/20 group-focus-within:text-purple-400 transition-colors pointer-events-none">
+                  <Lock size={18} />
+                </div>
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="8자 이상, 영문+숫자"
+                  required
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl py-3.5 pl-12 pr-12 text-white placeholder:text-white/25 outline-none focus:border-purple-500/50 focus:bg-white/10 transition-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-4 flex items-center text-white/20 hover:text-white/60 transition-colors"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {/* 비밀번호 규칙 표시 */}
+              {password && (
+                <div className="flex gap-3 px-1 mt-1">
+                  <div className={`flex items-center gap-1 text-[11px] transition-colors ${passwordRules.length ? "text-emerald-400" : "text-white/25"}`}>
+                    <CheckCircle2 size={12} /> 8자 이상
+                  </div>
+                  <div className={`flex items-center gap-1 text-[11px] transition-colors ${passwordRules.combo ? "text-emerald-400" : "text-white/25"}`}>
+                    <CheckCircle2 size={12} /> 영문+숫자
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 비밀번호 확인 */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-white/40 ml-1 uppercase tracking-wider">Confirm Password</label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-4 flex items-center text-white/20 group-focus-within:text-purple-400 transition-colors pointer-events-none">
+                  <Lock size={18} />
+                </div>
+                <input
+                  type={showPasswordConfirm ? "text" : "password"}
+                  value={passwordConfirm}
+                  onChange={(e) => setPasswordConfirm(e.target.value)}
+                  placeholder="비밀번호 재입력"
+                  required
+                  className={`w-full bg-white/5 border rounded-2xl py-3.5 pl-12 pr-12 text-white placeholder:text-white/25 outline-none focus:bg-white/10 transition-all ${
+                    passwordConfirm && !passwordMatch
+                      ? "border-red-500/50 focus:border-red-500/70"
+                      : passwordMatch
+                      ? "border-emerald-500/50 focus:border-emerald-500/70"
+                      : "border-white/10 focus:border-purple-500/50"
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordConfirm(!showPasswordConfirm)}
+                  className="absolute inset-y-0 right-4 flex items-center text-white/20 hover:text-white/60 transition-colors"
+                >
+                  {showPasswordConfirm ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {passwordConfirm && (
+                <p className={`text-[11px] px-1 transition-colors ${passwordMatch ? "text-emerald-400" : "text-red-400"}`}>
+                  {passwordMatch ? "✅ 비밀번호가 일치합니다" : "❌ 비밀번호가 일치하지 않습니다"}
+                </p>
+              )}
+            </div>
+
+            {/* 제출 버튼 */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-4 bg-gradient-to-r from-purple-500 to-blue-600 text-white font-bold rounded-2xl hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-xl shadow-purple-500/20 disabled:opacity-40 mt-2"
+            >
+              {loading
+                ? <Loader2 size={20} className="animate-spin" />
+                : <><span>회원가입</span><ChevronRight size={20} /></>
+              }
+            </button>
+          </form>
+
+          <div className="mt-6 text-center">
+            <p className="text-white/40 text-sm">
               이미 계정이 있으신가요?{" "}
-              <Link href="/login" className="font-medium text-blue-600 hover:text-blue-500">로그인</Link>
+              <Link href="/login" className="text-white font-bold hover:text-purple-400 underline underline-offset-4 transition-colors">
+                로그인
+              </Link>
             </p>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   );

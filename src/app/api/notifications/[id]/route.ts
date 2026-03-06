@@ -1,29 +1,35 @@
 // src/app/api/notifications/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth"; // ✅ 수정: @/app/api/auth/[...nextauth]/route → @/lib/auth (다른 route 파일과 동일하게)
 import { prisma } from "@/lib/db";
 
 // PATCH /api/notifications/[id] — 단건 읽음 처리
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> } // ✅ 수정: Next.js 15 params는 Promise
 ) {
   try {
+    const { id } = await params;
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
     const notification = await prisma.notification.findFirst({
-      where: { id: params.id, userId: session.user.id },
+      where: { id, userId: session.user.id },
     });
     if (!notification) {
       return NextResponse.json({ error: "알림을 찾을 수 없습니다" }, { status: 404 });
     }
 
+    // 이미 읽은 경우 DB 업데이트 생략
+    if (notification.isRead) {
+      return NextResponse.json(notification);
+    }
+
     const updated = await prisma.notification.update({
-      where: { id: params.id },
+      where: { id },
       data: { isRead: true },
     });
 
@@ -37,22 +43,23 @@ export async function PATCH(
 // DELETE /api/notifications/[id] — 단건 삭제
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> } // ✅ 수정: Next.js 15 params는 Promise
 ) {
   try {
+    const { id } = await params;
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
     const notification = await prisma.notification.findFirst({
-      where: { id: params.id, userId: session.user.id },
+      where: { id, userId: session.user.id },
     });
     if (!notification) {
       return NextResponse.json({ error: "알림을 찾을 수 없습니다" }, { status: 404 });
     }
 
-    await prisma.notification.delete({ where: { id: params.id } });
+    await prisma.notification.delete({ where: { id } });
 
     return NextResponse.json({ message: "알림을 삭제했습니다" });
   } catch (error) {

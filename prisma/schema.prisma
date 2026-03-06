@@ -1,5 +1,4 @@
 // prisma/schema.prisma
-// 전체 완성본 — 기존 파일을 이것으로 교체하세요
 
 generator client {
   provider      = "prisma-client-js"
@@ -22,13 +21,13 @@ enum ResourceType {
   FILE
   FOLDER
   POST
-  CHATROOM   // 기존 데이터 보존
+  CHATROOM
 }
 
 enum Permission {
   VIEW
   EDIT
-  ADMIN      // 기존 데이터 보존
+  ADMIN
 }
 
 enum Visibility {
@@ -47,7 +46,7 @@ enum MessageType {
   FILE
   SYSTEM
   CALL
-  CALL_LOG   // 기존 데이터 보존
+  CALL_LOG
 }
 
 enum CallStatus {
@@ -55,8 +54,8 @@ enum CallStatus {
   ACTIVE
   ENDED
   MISSED
-  ACCEPTED   // 기존 데이터 보존
-  REJECTED   // 기존 데이터 보존
+  ACCEPTED
+  REJECTED
 }
 
 enum CallType {
@@ -70,13 +69,16 @@ enum NetworkType {
   CELLULAR
 }
 
+// ✅ 수정: 기존 값(COMMENT, SHARE, CHAT, FILE_UPLOAD, CALL)은
+//    DB에서 사용 중인 경우 아래 마이그레이션 주의사항을 참고하세요
 enum NotificationType {
-  COMMENT
-  SHARE
-  CHAT
-  SYSTEM
-  FILE_UPLOAD
-  CALL
+  SYSTEM        // 공지, 서버 알림
+  FILE_SHARED   // 파일 공유 받음       (기존 SHARE → 변경)
+  POST_COMMENT  // 내 게시글에 댓글     (기존 COMMENT → 변경)
+  POST_LIKE     // 내 게시글 좋아요
+  FOLLOW        // 새 팔로워
+  CALL_MISSED   // 부재중 통화          (기존 CALL → 변경)
+  CHAT_MESSAGE  // 새 채팅 메시지       (기존 CHAT → 변경)
 }
 
 enum ActivityAction {
@@ -120,23 +122,18 @@ model User {
   twoFactorBackups  String[] @map("two_factor_backups")
   networkType   NetworkType @default(OFFLINE) @map("network_type")
 
-  // 스토리지
   storageUsed   BigInt  @default(0)          @map("storage_used")
   storageLimit  BigInt  @default(5368709120) @map("storage_limit")
 
-  // 계정 상태
   isBanned      Boolean   @default(false) @map("is_banned")
   banReason     String?   @map("ban_reason")
   bannedAt      DateTime? @map("banned_at")
 
-  // 온보딩
   onboardingDone Boolean @default(false) @map("onboarding_done")
 
-  // 프로필 이미지
   avatarUrl     String? @map("avatar_url")
   coverUrl      String? @map("cover_url")
 
-  // 관계
   files                File[]
   folders              Folder[]
   posts                Post[]
@@ -274,21 +271,13 @@ model File {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  // 공개 공유
   publicToken   String?  @unique @map("public_token")
-
-  // 휴지통
   deletedAt     DateTime? @map("deleted_at")
-
-  // 암호화
   encryptedKey  String?  @map("encrypted_key")
   isEncrypted   Boolean  @default(false) @map("is_encrypted")
-
-  // 즐겨찾기 / 핀
   isStarred     Boolean  @default(false) @map("is_starred")
   isPinned      Boolean  @default(false) @map("is_pinned")
 
-  // 관계
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   folder       Folder?      @relation(fields: [folderId], references: [id], onDelete: SetNull)
   fileTags     FileTag[]
@@ -434,9 +423,9 @@ model Notification {
   type      NotificationType @default(SYSTEM)
   title     String
   message   String
-  body      String?
+  body      String?          // 긴 본문이 필요한 경우 (push notification 등)
   link      String?
-  metadata  Json?
+  metadata  Json?            // 추가 컨텍스트 (fileId, postId 등)
   isRead    Boolean          @default(false) @map("is_read")
   createdAt DateTime         @default(now()) @map("created_at")
 

@@ -157,17 +157,35 @@ export default function ChatRoomPage() {
       localVideoRef.current.srcObject = localStream;
   }, [localStream]);
 
-  useEffect(() => {
-    if (!remoteStream) return;
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = remoteStream;
+  // ── 스트림 → DOM 연결 ─────────────────────────────────
+  // [FIX] remoteStream이 ontrack 시점에 도착하지만 DOM ref가 아직 null일 수 있음
+  // remoteStream을 ref에 저장하고, callStatus가 바뀌어 DOM이 생긴 후에도 재시도
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+
+  const attachRemoteStream = useCallback(() => {
+    const stream = remoteStreamRef.current;
+    if (!stream) return;
+    if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== stream) {
+      remoteVideoRef.current.srcObject = stream;
       remoteVideoRef.current.play().catch(() => {});
     }
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.srcObject = remoteStream;
+    if (remoteAudioRef.current && remoteAudioRef.current.srcObject !== stream) {
+      remoteAudioRef.current.srcObject = stream;
       remoteAudioRef.current.play().catch(() => {});
     }
-  }, [remoteStream]);
+  }, []);
+
+  useEffect(() => {
+    if (!remoteStream) return;
+    remoteStreamRef.current = remoteStream;
+    attachRemoteStream();
+  }, [remoteStream, attachRemoteStream]);
+
+  // callStatus가 바뀌어 모달 DOM이 새로 그려질 때도 재시도
+  useEffect(() => {
+    const active = ["calling", "connected", "incoming", "ended"].includes(callStatus);
+    if (active) requestAnimationFrame(() => attachRemoteStream());
+  }, [callStatus, attachRemoteStream]);
 
   useEffect(() => {
     if (incomingCall?.callType) setCurrentCallType(incomingCall.callType);

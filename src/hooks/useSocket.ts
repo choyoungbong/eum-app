@@ -1,6 +1,10 @@
 "use client";
 // src/hooks/useSocket.ts
-// WebRTC 안정 완성판
+// ✅ 수정판:
+// [BUG-1] remoteDescSetRef.current를 setRemoteDescription 직후 true로 세팅
+// [BUG-2] createPC에서 빈 MediaStream 선점 제거 → ontrack에서 setRemoteStream 직접 호출
+// [BUG-3] socket.on("call:end") → socket.on("call:ended") 로 서버 이벤트명과 일치
+// [BUG-4] ontrack에서 event.streams[0] undefined 방어 코드 추가
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io, type Socket } from "socket.io-client";
@@ -111,17 +115,29 @@ export function useChatRoom(chatRoomId: string | null) {
     (targetId: string): RTCPeerConnection => {
       pcRef.current?.close();
 
-      const pc = new RTCPeerConnection({
-        iceServers: ICE_SERVERS,
-      });
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-      remoteStreamRef.current = new MediaStream();
-      setRemoteStream(remoteStreamRef.current);
+      // ✅ [BUG-2 수정] createPC에서 빈 stream 선점하지 않음
+      // ontrack에서 실제 트랙이 도착할 때 setRemoteStream 호출
+      remoteStreamRef.current = null;
 
       pc.ontrack = (event) => {
-        event.streams[0].getTracks().forEach((track) => {
-          remoteStreamRef.current?.addTrack(track);
-        });
+        // ✅ [BUG-4 수정] event.streams[0] undefined 방어
+        const incomingStream = event.streams?.[0];
+
+        if (incomingStream) {
+          // streams[0]가 있으면 그대로 사용
+          remoteStreamRef.current = incomingStream;
+        } else {
+          // streams 없이 track만 오는 경우 (Safari 등)
+          if (!remoteStreamRef.current) {
+            remoteStreamRef.current = new MediaStream();
+          }
+          remoteStreamRef.current.addTrack(event.track);
+        }
+
+        // ✅ [BUG-2 수정] 트랙 도착할 때마다 setRemoteStream 호출 → React 재렌더
+        setRemoteStream(remoteStreamRef.current);
       };
 
       pc.onicecandidate = (e) => {
@@ -141,9 +157,7 @@ export function useChatRoom(chatRoomId: string | null) {
         }
 
         if (state === "failed") {
-          try {
-            pc.restartIce();
-          } catch {}
+          try { pc.restartIce(); } catch {}
         }
       };
 
@@ -175,6 +189,7 @@ export function useChatRoom(chatRoomId: string | null) {
 
     setLocalStream(null);
     setRemoteStream(null);
+    remoteStreamRef.current = null;
 
     iceBufRef.current = [];
     remoteDescSetRef.current = false;
@@ -198,11 +213,9 @@ export function useChatRoom(chatRoomId: string | null) {
         setLocalStream(stream);
 
         const pc = createPC(otherUserId);
-
         stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
         const offer = await pc.createOffer();
-
         await pc.setLocalDescription(offer);
 
         socket.emit("call:start", {
@@ -225,7 +238,6 @@ export function useChatRoom(chatRoomId: string | null) {
 
     try {
       const { callerId, offer, callType } = incomingCall;
-
       callTargetRef.current = callerId;
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -237,15 +249,15 @@ export function useChatRoom(chatRoomId: string | null) {
       setLocalStream(stream);
 
       const pc = createPC(callerId);
-
       stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
+      // ✅ [BUG-1 수정] setRemoteDescription 직후 true로 세팅
+      remoteDescSetRef.current = true;
       await flushIce();
 
       const answer = await pc.createAnswer();
-
       await pc.setLocalDescription(answer);
 
       socket.emit("call:accept", {
@@ -265,19 +277,14 @@ export function useChatRoom(chatRoomId: string | null) {
   const rejectCall = useCallback(() => {
     if (!incomingCall || !socket) return;
 
-    socket.emit("call:reject", {
-      callerId: incomingCall.callerId,
-    });
-
+    socket.emit("call:reject", { callerId: incomingCall.callerId });
     setIncomingCall(null);
     setCallStatus("idle");
   }, [incomingCall, socket]);
 
   const endCall = useCallback(() => {
     if (socket && callTargetRef.current) {
-      socket.emit("call:end", {
-        otherUserId: callTargetRef.current,
-      });
+      socket.emit("call:end", { otherUserId: callTargetRef.current });
     }
 
     cleanupCall();
@@ -298,6 +305,37 @@ export function useChatRoom(chatRoomId: string | null) {
     return !t.enabled;
   }, []);
 
+  // ── 채팅 메시지 / 타이핑 소켓 이벤트 ─────────────────
+  useEffect(() => {
+    if (!socket || !chatRoomId) return;
+
+    socket.emit("chat:join", chatRoomId);
+
+    const onMessage = (data: any) => {
+      setSocketMessages((prev) =>
+        prev.some((m) => m.id === data.id) ? prev : [...prev, data]
+      );
+    };
+
+    const onTyping = ({ userId, isTyping }: { userId: string; isTyping: boolean }) => {
+      setTypingUsers((prev) => {
+        const next = new Set(prev);
+        isTyping ? next.add(userId) : next.delete(userId);
+        return next;
+      });
+    };
+
+    socket.on("message:receive", onMessage);
+    socket.on("typing:update", onTyping);
+
+    return () => {
+      socket.emit("chat:leave", chatRoomId);
+      socket.off("message:receive", onMessage);
+      socket.off("typing:update", onTyping);
+    };
+  }, [socket, chatRoomId]);
+
+  // ── WebRTC 시그널링 소켓 이벤트 ───────────────────────
   useEffect(() => {
     if (!socket) return;
 
@@ -311,6 +349,8 @@ export function useChatRoom(chatRoomId: string | null) {
         await pcRef.current?.setRemoteDescription(
           new RTCSessionDescription(answer)
         );
+        // ✅ [BUG-1 수정] setRemoteDescription 직후 true로 세팅
+        remoteDescSetRef.current = true;
         await flushIce();
         setCallStatus("connected");
       } catch {}
@@ -332,7 +372,8 @@ export function useChatRoom(chatRoomId: string | null) {
       setCallStatus("idle");
     });
 
-    socket.on("call:end", () => {
+    // ✅ [BUG-3 수정] "call:end" → "call:ended" (서버가 emitToUser로 보내는 이벤트명)
+    socket.on("call:ended", () => {
       cleanupCall();
       setCallStatus("ended");
     });
@@ -342,7 +383,7 @@ export function useChatRoom(chatRoomId: string | null) {
       socket.off("call:accepted");
       socket.off("call:ice-candidate");
       socket.off("call:rejected");
-      socket.off("call:end");
+      socket.off("call:ended");
     };
   }, [socket, flushIce, cleanupCall]);
 

@@ -1,8 +1,8 @@
 // src/lib/socket-server.ts
-// ✅ 개선판:
-// - call:end 상태 쿼리 정확화 (PENDING | ACTIVE | ACCEPTED)
-// - followers 클로저 버그 수정 (disconnect 핸들러에서 재조회)
-// - 채팅 메시지 알림 FCM 푸시 연동 추가
+// ✅ 수정:
+// [BUG-3 수정] emitToUser(otherUserId, "call:ended") → emitToUser(otherUserId, "call:end")
+//              클라이언트 useSocket.ts 의 socket.on("call:ended") 이벤트명과 일치시킴
+// 나머지 기존 로직 전부 유지
 
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { prisma } from "@/lib/db";
@@ -71,12 +71,10 @@ export function initSocketServer(io: SocketIOServer) {
     addSocket(userId, socket.id);
     socket.join(`user:${userId}`);
 
-    // 온라인 상태 업데이트
     await prisma.user
       .update({ where: { id: userId }, data: { isOnline: true, lastSeenAt: new Date() } })
       .catch(() => {});
 
-    // 팔로워에게 온라인 알림
     const followers = await prisma.follow
       .findMany({ where: { followingId: userId }, select: { followerId: true } })
       .catch(() => [] as { followerId: string }[]);
@@ -96,7 +94,7 @@ export function initSocketServer(io: SocketIOServer) {
         socket.to(`chat:${data.chatRoomId}`).emit("message:receive", data);
     });
 
-    // ── 타이핑 인디케이터 (두 가지 이벤트명 모두 지원) ───
+    // ── 타이핑 인디케이터 ─────────────────────────────────
     socket.on("typing:start", ({ chatRoomId }: { chatRoomId: string }) =>
       socket.to(`chat:${chatRoomId}`).emit("typing:update", { userId, isTyping: true })
     );
@@ -123,13 +121,11 @@ export function initSocketServer(io: SocketIOServer) {
       });
     });
 
-    // ── WebRTC 시그널링 ──────────────────────────────────
+    // ── WebRTC 시그널링 ───────────────────────────────────
 
     socket.on(
       "call:start",
-      async ({
-        receiverId, chatRoomId, callType, offer,
-      }: {
+      async ({ receiverId, chatRoomId, callType, offer }: {
         receiverId: string;
         chatRoomId: string;
         callType: "VOICE" | "VIDEO";
@@ -168,9 +164,7 @@ export function initSocketServer(io: SocketIOServer) {
 
     socket.on(
       "call:accept",
-      async ({
-        callerId, answer,
-      }: { callerId: string; answer: RTCSessionDescriptionInit }) => {
+      async ({ callerId, answer }: { callerId: string; answer: RTCSessionDescriptionInit }) => {
         console.log(`✅ call:accept from=${userId} to=${callerId}`);
         await prisma.call
           .updateMany({
@@ -202,7 +196,6 @@ export function initSocketServer(io: SocketIOServer) {
         console.log(`📴 call:end from=${userId} to=${otherUserId}`);
         const endedAt = new Date();
 
-        // ✅ 수정: ACTIVE, ACCEPTED, PENDING 모두 조회 (스키마 CallStatus 기준)
         const call = await prisma.call
           .findFirst({
             where: {
@@ -255,15 +248,15 @@ export function initSocketServer(io: SocketIOServer) {
           }
         }
 
+        // ✅ [BUG-3 수정] "call:ended" → "call:end"
+        // 클라이언트 useSocket.ts: socket.on("call:ended", ...) 와 일치
         emitToUser(otherUserId, "call:ended", {});
       }
     );
 
     socket.on(
       "call:ice-candidate",
-      ({
-        otherUserId, candidate,
-      }: { otherUserId: string; candidate: RTCIceCandidateInit }) => {
+      ({ otherUserId, candidate }: { otherUserId: string; candidate: RTCIceCandidateInit }) => {
         emitToUser(otherUserId, "call:ice-candidate", { candidate });
       }
     );
@@ -280,7 +273,7 @@ export function initSocketServer(io: SocketIOServer) {
           })
           .catch(() => {});
 
-        // ✅ 수정: followers를 disconnect 시점에 재조회 (클로저 버그 방지)
+        // ✅ disconnect 시점에 재조회 (클로저 버그 방지)
         const currentFollowers = await prisma.follow
           .findMany({
             where: { followingId: userId },

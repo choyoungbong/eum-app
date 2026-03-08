@@ -19649,6 +19649,68 @@ declare module "next-auth/jwt" {
 }
 </file>
 
+<file path="tailwind.config.js">
+import type { Config } from "tailwindcss";
+
+const config: Config = {
+  darkMode: "class",
+  content: [
+    "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/hooks/**/*.{js,ts,jsx,tsx}",
+    "./src/lib/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ["Pretendard", "system-ui", "sans-serif"],
+      },
+      colors: {
+        brand: {
+          50:  "#f5f3ff",
+          100: "#ede9fe",
+          200: "#ddd6fe",
+          300: "#c4b5fd",
+          400: "#a78bfa",
+          500: "#8b5cf6",
+          600: "#7c3aed",
+          700: "#6d28d9",
+          800: "#5b21b6",
+          900: "#4c1d95",
+        },
+      },
+      screens: {
+        xs: "375px",
+      },
+      animation: {
+        "fade-in":    "fadeIn 0.2s ease-in-out",
+        "slide-up":   "slideUp 0.3s ease-out",
+        "slide-down": "slideDown 0.3s ease-out",
+        "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+      },
+      keyframes: {
+        fadeIn: {
+          "0%":   { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
+        slideUp: {
+          "0%":   { transform: "translateY(10px)", opacity: "0" },
+          "100%": { transform: "translateY(0)",    opacity: "1" },
+        },
+        slideDown: {
+          "0%":   { transform: "translateY(-10px)", opacity: "0" },
+          "100%": { transform: "translateY(0)",     opacity: "1" },
+        },
+      },
+    },
+  },
+  plugins: [],
+};
+
+export default config;
+</file>
+
 <file path="next.config.js">
 // next.config.js
 // Docker standalone 빌드 + 보안 헤더 설정
@@ -22783,68 +22845,6 @@ const ioHandler = (req: NextApiRequest, res: NextApiResponseServerIo) => {
 };
 
 export default ioHandler;
-</file>
-
-<file path="tailwind.config.js">
-import type { Config } from "tailwindcss";
-
-const config: Config = {
-  darkMode: "class",
-  content: [
-    "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
-    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
-    "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
-    "./src/hooks/**/*.{js,ts,jsx,tsx}",
-    "./src/lib/**/*.{js,ts,jsx,tsx}",
-  ],
-  theme: {
-    extend: {
-      fontFamily: {
-        sans: ["Pretendard", "system-ui", "sans-serif"],
-      },
-      colors: {
-        brand: {
-          50:  "#f5f3ff",
-          100: "#ede9fe",
-          200: "#ddd6fe",
-          300: "#c4b5fd",
-          400: "#a78bfa",
-          500: "#8b5cf6",
-          600: "#7c3aed",
-          700: "#6d28d9",
-          800: "#5b21b6",
-          900: "#4c1d95",
-        },
-      },
-      screens: {
-        xs: "375px",
-      },
-      animation: {
-        "fade-in":    "fadeIn 0.2s ease-in-out",
-        "slide-up":   "slideUp 0.3s ease-out",
-        "slide-down": "slideDown 0.3s ease-out",
-        "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
-      },
-      keyframes: {
-        fadeIn: {
-          "0%":   { opacity: "0" },
-          "100%": { opacity: "1" },
-        },
-        slideUp: {
-          "0%":   { transform: "translateY(10px)", opacity: "0" },
-          "100%": { transform: "translateY(0)",    opacity: "1" },
-        },
-        slideDown: {
-          "0%":   { transform: "translateY(-10px)", opacity: "0" },
-          "100%": { transform: "translateY(0)",     opacity: "1" },
-        },
-      },
-    },
-  },
-  plugins: [],
-};
-
-export default config;
 </file>
 
 <file path="tsconfig.json">
@@ -38583,6 +38583,176 @@ input:-webkit-autofill:focus {
 }
 </file>
 
+<file path="src/app/providers.tsx">
+"use client";
+// src/app/providers.tsx
+
+import { SessionProvider, useSession } from "next-auth/react";
+import { ThemeProvider } from "next-themes";
+import { ToastProvider } from "@/components/Toast";
+import OnboardingTour from "@/components/OnboardingTour";
+import MobileBottomNav from "@/components/MobileBottomNav";
+import SystemNoticeBanner from "@/components/SystemNoticeBanner";
+import UploadProgressOverlay from "@/components/UploadProgressOverlay";
+import { useSocketConnection, useSocketNotifications } from "@/lib/socket-client";
+import { useCallback, useEffect } from "react";
+import { useToast } from "@/components/Toast";
+import { sound } from "@/lib/sound";
+
+// ── FCM 등록 브릿지 ──────────────────────────────────────
+function FCMBridge() {
+  const { data: session, status } = useSession();
+
+  useEffect(() => {
+    if (status !== "authenticated" || !session?.user) return;
+    if (typeof window === "undefined") return;
+    if (Notification.permission === "granted") {
+      import("@/lib/firebase")
+        .then(({ registerFCMToken }) => registerFCMToken())
+        .catch((e) => console.error("FCM 초기화 실패:", e));
+    }
+  }, [status, session?.user]);
+
+  return null;
+}
+
+// ── 소켓 알림 브릿지 ─────────────────────────────────────
+function SocketBridge() {
+  const connected = useSocketConnection();
+  const { addToast } = useToast();
+
+  const onNotification = useCallback(
+    (n: { type: string; message: string }) => {
+      sound.notification();
+      addToast("info", n.message);
+    },
+    [addToast]
+  );
+
+  useSocketNotifications(onNotification);
+  return null;
+}
+
+// ── 최상위 Providers ──────────────────────────────────────
+export function Providers({ children }: { children: React.ReactNode }) {
+  return (
+    <SessionProvider>
+      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <ToastProvider>
+          <SocketBridge />
+          <FCMBridge />
+          <SystemNoticeBanner />
+          {children}
+          <UploadProgressOverlay />
+          <MobileBottomNav />
+          <OnboardingTour />
+          {/* KeyboardShortcuts 제거 — e.key undefined 에러 원인 */}
+        </ToastProvider>
+      </ThemeProvider>
+    </SessionProvider>
+  );
+}
+</file>
+
+<file path="src/lib/emit-notification.ts">
+// src/lib/emit-notification.ts
+import { prisma } from "@/lib/db";
+import { Prisma } from "@prisma/client";
+import type { Server } from "socket.io";
+
+export type NotificationType =
+  | "SYSTEM"
+  | "FILE_SHARED"
+  | "POST_COMMENT"
+  | "POST_LIKE"
+  | "FOLLOW"
+  | "CALL_MISSED"
+  | "CHAT_MESSAGE";
+
+interface EmitNotificationParams {
+  title:     string;
+  message:   string;
+  type:      NotificationType;
+  link?:     string;
+  // ✅ Record<string, unknown> → Prisma.InputJsonValue (빌드 타입 오류 해결)
+  metadata?: Prisma.InputJsonValue;
+}
+
+// ✅ [품질] (global as any).io → 타입 안전한 헬퍼로 교체
+function getIO(): Server | null {
+  return (global as { io?: Server }).io ?? null;
+}
+
+// ─── 단건 알림 생성 ───────────────────────────────────────
+export async function emitNotification(
+  userId: string,
+  params: EmitNotificationParams
+) {
+  try {
+    const notification = await prisma.notification.create({
+      data: {
+        userId,
+        title:    params.title,
+        message:  params.message,
+        type:     params.type,
+        link:     params.link     ?? null,
+        metadata: params.metadata ?? Prisma.JsonNull,
+        isRead:   false,
+      },
+    });
+
+    // ✅ DB 저장 후 실시간 소켓 전송
+    const io = getIO();
+    if (io) {
+      io.to(`user:${userId}`).emit("notification:new", notification);
+    }
+
+    return notification;
+  } catch (error) {
+    console.error("[emitNotification] 알림 저장 실패:", error);
+    return null;
+  }
+}
+
+// ─── 다수 유저에게 동시 알림 ──────────────────────────────
+export async function emitNotificationToMany(
+  userIds: string[],
+  params: EmitNotificationParams
+) {
+  if (userIds.length === 0) return;
+
+  try {
+    await prisma.notification.createMany({
+      data: userIds.map((userId) => ({
+        userId,
+        title:    params.title,
+        message:  params.message,
+        type:     params.type,
+        link:     params.link     ?? null,
+        metadata: params.metadata ?? Prisma.JsonNull,
+        isRead:   false,
+      })),
+      skipDuplicates: true,
+    });
+
+    // ✅ DB 저장 후 전체 유저에게 실시간 소켓 전송
+    const io = getIO();
+    if (io) {
+      userIds.forEach((userId) => {
+        io.to(`user:${userId}`).emit("notification:new", {
+          type:    params.type,
+          title:   params.title,
+          message: params.message,
+          link:    params.link,
+        });
+      });
+    }
+  } catch (error) {
+    console.error("[emitNotificationToMany] 알림 저장 실패:", error);
+  }
+}
+</file>
+
 <file path="src/lib/webrtc.ts">
 // src/lib/webrtc.ts
 
@@ -38849,176 +39019,6 @@ export function getWebRTCManager(config?: WebRTCConfig): WebRTCManager {
 export function destroyWebRTCManager() {
   _instance?.destroy();
   _instance = null;
-}
-</file>
-
-<file path="src/app/providers.tsx">
-"use client";
-// src/app/providers.tsx
-
-import { SessionProvider, useSession } from "next-auth/react";
-import { ThemeProvider } from "next-themes";
-import { ToastProvider } from "@/components/Toast";
-import OnboardingTour from "@/components/OnboardingTour";
-import MobileBottomNav from "@/components/MobileBottomNav";
-import SystemNoticeBanner from "@/components/SystemNoticeBanner";
-import UploadProgressOverlay from "@/components/UploadProgressOverlay";
-import { useSocketConnection, useSocketNotifications } from "@/lib/socket-client";
-import { useCallback, useEffect } from "react";
-import { useToast } from "@/components/Toast";
-import { sound } from "@/lib/sound";
-
-// ── FCM 등록 브릿지 ──────────────────────────────────────
-function FCMBridge() {
-  const { data: session, status } = useSession();
-
-  useEffect(() => {
-    if (status !== "authenticated" || !session?.user) return;
-    if (typeof window === "undefined") return;
-    if (Notification.permission === "granted") {
-      import("@/lib/firebase")
-        .then(({ registerFCMToken }) => registerFCMToken())
-        .catch((e) => console.error("FCM 초기화 실패:", e));
-    }
-  }, [status, session?.user]);
-
-  return null;
-}
-
-// ── 소켓 알림 브릿지 ─────────────────────────────────────
-function SocketBridge() {
-  const connected = useSocketConnection();
-  const { addToast } = useToast();
-
-  const onNotification = useCallback(
-    (n: { type: string; message: string }) => {
-      sound.notification();
-      addToast("info", n.message);
-    },
-    [addToast]
-  );
-
-  useSocketNotifications(onNotification);
-  return null;
-}
-
-// ── 최상위 Providers ──────────────────────────────────────
-export function Providers({ children }: { children: React.ReactNode }) {
-  return (
-    <SessionProvider>
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-        <ToastProvider>
-          <SocketBridge />
-          <FCMBridge />
-          <SystemNoticeBanner />
-          {children}
-          <UploadProgressOverlay />
-          <MobileBottomNav />
-          <OnboardingTour />
-          {/* KeyboardShortcuts 제거 — e.key undefined 에러 원인 */}
-        </ToastProvider>
-      </ThemeProvider>
-    </SessionProvider>
-  );
-}
-</file>
-
-<file path="src/lib/emit-notification.ts">
-// src/lib/emit-notification.ts
-import { prisma } from "@/lib/db";
-import { Prisma } from "@prisma/client";
-import type { Server } from "socket.io";
-
-export type NotificationType =
-  | "SYSTEM"
-  | "FILE_SHARED"
-  | "POST_COMMENT"
-  | "POST_LIKE"
-  | "FOLLOW"
-  | "CALL_MISSED"
-  | "CHAT_MESSAGE";
-
-interface EmitNotificationParams {
-  title:     string;
-  message:   string;
-  type:      NotificationType;
-  link?:     string;
-  // ✅ Record<string, unknown> → Prisma.InputJsonValue (빌드 타입 오류 해결)
-  metadata?: Prisma.InputJsonValue;
-}
-
-// ✅ [품질] (global as any).io → 타입 안전한 헬퍼로 교체
-function getIO(): Server | null {
-  return (global as { io?: Server }).io ?? null;
-}
-
-// ─── 단건 알림 생성 ───────────────────────────────────────
-export async function emitNotification(
-  userId: string,
-  params: EmitNotificationParams
-) {
-  try {
-    const notification = await prisma.notification.create({
-      data: {
-        userId,
-        title:    params.title,
-        message:  params.message,
-        type:     params.type,
-        link:     params.link     ?? null,
-        metadata: params.metadata ?? Prisma.JsonNull,
-        isRead:   false,
-      },
-    });
-
-    // ✅ DB 저장 후 실시간 소켓 전송
-    const io = getIO();
-    if (io) {
-      io.to(`user:${userId}`).emit("notification:new", notification);
-    }
-
-    return notification;
-  } catch (error) {
-    console.error("[emitNotification] 알림 저장 실패:", error);
-    return null;
-  }
-}
-
-// ─── 다수 유저에게 동시 알림 ──────────────────────────────
-export async function emitNotificationToMany(
-  userIds: string[],
-  params: EmitNotificationParams
-) {
-  if (userIds.length === 0) return;
-
-  try {
-    await prisma.notification.createMany({
-      data: userIds.map((userId) => ({
-        userId,
-        title:    params.title,
-        message:  params.message,
-        type:     params.type,
-        link:     params.link     ?? null,
-        metadata: params.metadata ?? Prisma.JsonNull,
-        isRead:   false,
-      })),
-      skipDuplicates: true,
-    });
-
-    // ✅ DB 저장 후 전체 유저에게 실시간 소켓 전송
-    const io = getIO();
-    if (io) {
-      userIds.forEach((userId) => {
-        io.to(`user:${userId}`).emit("notification:new", {
-          type:    params.type,
-          title:   params.title,
-          message: params.message,
-          link:    params.link,
-        });
-      });
-    }
-  } catch (error) {
-    console.error("[emitNotificationToMany] 알림 저장 실패:", error);
-  }
 }
 </file>
 
@@ -41343,15 +41343,16 @@ export default function ChatRoomPage() {
 <file path="src/hooks/useSocket.ts">
 "use client";
 // src/hooks/useSocket.ts
-// ✅ 수정판:
-// [BUG-1] remoteDescSetRef.current를 setRemoteDescription 직후 true로 세팅
-// [BUG-2] createPC에서 빈 MediaStream 선점 제거 → ontrack에서 setRemoteStream 직접 호출
-// [BUG-3] socket.on("call:end") → socket.on("call:ended") 로 서버 이벤트명과 일치
-// [BUG-4] ontrack에서 event.streams[0] undefined 방어 코드 추가
+// ✅ v2 수정판:
+// [FIX-1] getUserMedia NotFoundError → toast 에러 + 조용히 실패하지 않음
+// [FIX-2] 디바이스 없을 때 fallback: 음성통화는 audio만, 영상은 audio만으로 재시도
+// [FIX-3] 에러 종류별 한국어 메시지 (NotFoundError / NotAllowedError / 기타)
+// [기존 BUG-1~4 수정 모두 유지]
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io, type Socket } from "socket.io-client";
 import { useSession } from "next-auth/react";
+import { toast } from "@/components/Toast";
 
 let _socket: Socket | null = null;
 let _userId: string | null = null;
@@ -41404,6 +41405,62 @@ const ICE_SERVERS: RTCIceServer[] = [
     credential: "openrelayproject",
   },
 ];
+
+// ✅ [FIX-1] getUserMedia 에러 → 한국어 메시지 변환
+function getMediaErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+      return "마이크 또는 카메라를 찾을 수 없습니다. 장치를 연결하거나 권한을 확인해주세요.";
+    }
+    if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+      return "마이크/카메라 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.";
+    }
+    if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+      return "마이크/카메라가 다른 앱에서 사용 중입니다. 앱을 닫고 다시 시도해주세요.";
+    }
+    if (err.name === "OverconstrainedError") {
+      return "요청한 미디어 설정을 지원하지 않는 장치입니다.";
+    }
+    if (err.name === "SecurityError") {
+      return "보안 오류: HTTPS 환경에서만 통화 기능을 사용할 수 있습니다.";
+    }
+  }
+  return "미디어 장치에 접근할 수 없습니다. 장치와 권한을 확인해주세요.";
+}
+
+// ✅ [FIX-2] getUserMedia with fallback
+// 영상통화 시 카메라 없으면 audio만으로 재시도
+async function getMediaStreamSafe(
+  callType: "VOICE" | "VIDEO"
+): Promise<{ stream: MediaStream; actualType: "VOICE" | "VIDEO" }> {
+  // 1차 시도: 요청한 그대로
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: callType === "VIDEO",
+    });
+    return { stream, actualType: callType };
+  } catch (err) {
+    // 영상통화인데 카메라 없는 경우 → audio만으로 재시도
+    if (
+      callType === "VIDEO" &&
+      err instanceof Error &&
+      (err.name === "NotFoundError" || err.name === "DevicesNotFoundError")
+    ) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false,
+        });
+        toast.error?.("카메라를 찾을 수 없어 음성 통화로 전환합니다.");
+        return { stream, actualType: "VOICE" };
+      } catch (fallbackErr) {
+        throw fallbackErr; // 오디오도 실패하면 포기
+      }
+    }
+    throw err;
+  }
+}
 
 export function useSocket() {
   const { data: session } = useSession();
@@ -41460,26 +41517,23 @@ export function useChatRoom(chatRoomId: string | null) {
 
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-      // ✅ [BUG-2 수정] createPC에서 빈 stream 선점하지 않음
-      // ontrack에서 실제 트랙이 도착할 때 setRemoteStream 호출
+      // [BUG-2 수정 유지] createPC에서 빈 stream 선점하지 않음
       remoteStreamRef.current = null;
 
       pc.ontrack = (event) => {
-        // ✅ [BUG-4 수정] event.streams[0] undefined 방어
+        // [BUG-4 수정 유지] event.streams[0] undefined 방어
         const incomingStream = event.streams?.[0];
 
         if (incomingStream) {
-          // streams[0]가 있으면 그대로 사용
           remoteStreamRef.current = incomingStream;
         } else {
-          // streams 없이 track만 오는 경우 (Safari 등)
           if (!remoteStreamRef.current) {
             remoteStreamRef.current = new MediaStream();
           }
           remoteStreamRef.current.addTrack(event.track);
         }
 
-        // ✅ [BUG-2 수정] 트랙 도착할 때마다 setRemoteStream 호출 → React 재렌더
+        // [BUG-2 수정 유지] 트랙 도착 시 setRemoteStream → React 재렌더
         setRemoteStream(remoteStreamRef.current);
       };
 
@@ -41494,11 +41548,9 @@ export function useChatRoom(chatRoomId: string | null) {
 
       pc.oniceconnectionstatechange = () => {
         const state = pc.iceConnectionState;
-
         if (state === "connected" || state === "completed") {
           setCallStatus("connected");
         }
-
         if (state === "failed") {
           try { pc.restartIce(); } catch {}
         }
@@ -41513,13 +41565,9 @@ export function useChatRoom(chatRoomId: string | null) {
   const flushIce = useCallback(async () => {
     const pc = pcRef.current;
     if (!pc) return;
-
     for (const c of iceBufRef.current) {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(c));
-      } catch {}
+      try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
     }
-
     iceBufRef.current = [];
   }, []);
 
@@ -41543,14 +41591,25 @@ export function useChatRoom(chatRoomId: string | null) {
     async (callType: "VOICE" | "VIDEO", otherUserId?: string) => {
       if (!socket || callStatus !== "idle" || !otherUserId) return;
 
+      // ✅ [FIX-1] 먼저 디바이스 확인 — 실패해도 callStatus 변경 없이 조기 반환
+      let stream: MediaStream;
+      let actualCallType: "VOICE" | "VIDEO";
+
+      try {
+        const result = await getMediaStreamSafe(callType);
+        stream = result.stream;
+        actualCallType = result.actualType;
+      } catch (err) {
+        // ✅ [FIX-1] 에러 메시지를 사용자에게 표시
+        toast.error?.(getMediaErrorMessage(err));
+        console.error("[WebRTC] getUserMedia 실패:", err);
+        return; // callStatus는 "idle" 그대로 유지
+      }
+
+      // 여기서부터는 stream 확보된 상태
       try {
         callTargetRef.current = otherUserId;
         setCallStatus("calling");
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: callType === "VIDEO",
-        });
 
         localStreamRef.current = stream;
         setLocalStream(stream);
@@ -41564,11 +41623,12 @@ export function useChatRoom(chatRoomId: string | null) {
         socket.emit("call:start", {
           receiverId: otherUserId,
           chatRoomId,
-          callType,
+          callType: actualCallType,
           offer: pc.localDescription,
         });
       } catch (err) {
-        console.error(err);
+        console.error("[WebRTC] initiateCall 오류:", err);
+        toast.error?.("통화 연결 중 오류가 발생했습니다.");
         cleanupCall();
         setCallStatus("idle");
       }
@@ -41579,14 +41639,25 @@ export function useChatRoom(chatRoomId: string | null) {
   const acceptCall = useCallback(async () => {
     if (!incomingCall || !socket) return;
 
-    try {
-      const { callerId, offer, callType } = incomingCall;
-      callTargetRef.current = callerId;
+    const { callerId, offer, callType } = incomingCall;
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: callType === "VIDEO",
-      });
+    // ✅ [FIX-1] acceptCall도 동일하게 처리
+    let stream: MediaStream;
+    try {
+      const result = await getMediaStreamSafe(callType);
+      stream = result.stream;
+    } catch (err) {
+      toast.error?.(getMediaErrorMessage(err));
+      console.error("[WebRTC] acceptCall getUserMedia 실패:", err);
+      // 수신 거절 처리
+      socket.emit("call:reject", { callerId });
+      setIncomingCall(null);
+      setCallStatus("idle");
+      return;
+    }
+
+    try {
+      callTargetRef.current = callerId;
 
       localStreamRef.current = stream;
       setLocalStream(stream);
@@ -41596,7 +41667,7 @@ export function useChatRoom(chatRoomId: string | null) {
 
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
-      // ✅ [BUG-1 수정] setRemoteDescription 직후 true로 세팅
+      // [BUG-1 수정 유지]
       remoteDescSetRef.current = true;
       await flushIce();
 
@@ -41611,7 +41682,8 @@ export function useChatRoom(chatRoomId: string | null) {
       setIncomingCall(null);
       setCallStatus("connected");
     } catch (err) {
-      console.error(err);
+      console.error("[WebRTC] acceptCall 오류:", err);
+      toast.error?.("통화 수락 중 오류가 발생했습니다.");
       cleanupCall();
       setCallStatus("idle");
     }
@@ -41619,7 +41691,6 @@ export function useChatRoom(chatRoomId: string | null) {
 
   const rejectCall = useCallback(() => {
     if (!incomingCall || !socket) return;
-
     socket.emit("call:reject", { callerId: incomingCall.callerId });
     setIncomingCall(null);
     setCallStatus("idle");
@@ -41629,7 +41700,6 @@ export function useChatRoom(chatRoomId: string | null) {
     if (socket && callTargetRef.current) {
       socket.emit("call:end", { otherUserId: callTargetRef.current });
     }
-
     cleanupCall();
     setCallStatus("ended");
   }, [socket, cleanupCall]);
@@ -41692,7 +41762,7 @@ export function useChatRoom(chatRoomId: string | null) {
         await pcRef.current?.setRemoteDescription(
           new RTCSessionDescription(answer)
         );
-        // ✅ [BUG-1 수정] setRemoteDescription 직후 true로 세팅
+        // [BUG-1 수정 유지]
         remoteDescSetRef.current = true;
         await flushIce();
         setCallStatus("connected");
@@ -41704,7 +41774,6 @@ export function useChatRoom(chatRoomId: string | null) {
         iceBufRef.current.push(candidate);
         return;
       }
-
       try {
         await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
       } catch {}
@@ -41715,10 +41784,16 @@ export function useChatRoom(chatRoomId: string | null) {
       setCallStatus("idle");
     });
 
-    // ✅ [BUG-3 수정] "call:end" → "call:ended" (서버가 emitToUser로 보내는 이벤트명)
+    // [BUG-3 수정 유지] "call:ended"
     socket.on("call:ended", () => {
       cleanupCall();
       setCallStatus("ended");
+    });
+
+    socket.on("call:user-offline", () => {
+      toast.error?.("상대방이 오프라인 상태입니다.");
+      cleanupCall();
+      setCallStatus("idle");
     });
 
     return () => {
@@ -41727,6 +41802,7 @@ export function useChatRoom(chatRoomId: string | null) {
       socket.off("call:ice-candidate");
       socket.off("call:rejected");
       socket.off("call:ended");
+      socket.off("call:user-offline");
     };
   }, [socket, flushIce, cleanupCall]);
 

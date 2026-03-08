@@ -1,14 +1,15 @@
 "use client";
 // src/hooks/useSocket.ts
-// ✅ 수정판:
-// [BUG-1] remoteDescSetRef.current를 setRemoteDescription 직후 true로 세팅
-// [BUG-2] createPC에서 빈 MediaStream 선점 제거 → ontrack에서 setRemoteStream 직접 호출
-// [BUG-3] socket.on("call:end") → socket.on("call:ended") 로 서버 이벤트명과 일치
-// [BUG-4] ontrack에서 event.streams[0] undefined 방어 코드 추가
+// ✅ v2 수정판:
+// [FIX-1] getUserMedia NotFoundError → toast 에러 + 조용히 실패하지 않음
+// [FIX-2] 디바이스 없을 때 fallback: 음성통화는 audio만, 영상은 audio만으로 재시도
+// [FIX-3] 에러 종류별 한국어 메시지 (NotFoundError / NotAllowedError / 기타)
+// [기존 BUG-1~4 수정 모두 유지]
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io, type Socket } from "socket.io-client";
 import { useSession } from "next-auth/react";
+import { toast } from "@/components/Toast";
 
 let _socket: Socket | null = null;
 let _userId: string | null = null;
@@ -61,6 +62,62 @@ const ICE_SERVERS: RTCIceServer[] = [
     credential: "openrelayproject",
   },
 ];
+
+// ✅ [FIX-1] getUserMedia 에러 → 한국어 메시지 변환
+function getMediaErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+      return "마이크 또는 카메라를 찾을 수 없습니다. 장치를 연결하거나 권한을 확인해주세요.";
+    }
+    if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+      return "마이크/카메라 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.";
+    }
+    if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+      return "마이크/카메라가 다른 앱에서 사용 중입니다. 앱을 닫고 다시 시도해주세요.";
+    }
+    if (err.name === "OverconstrainedError") {
+      return "요청한 미디어 설정을 지원하지 않는 장치입니다.";
+    }
+    if (err.name === "SecurityError") {
+      return "보안 오류: HTTPS 환경에서만 통화 기능을 사용할 수 있습니다.";
+    }
+  }
+  return "미디어 장치에 접근할 수 없습니다. 장치와 권한을 확인해주세요.";
+}
+
+// ✅ [FIX-2] getUserMedia with fallback
+// 영상통화 시 카메라 없으면 audio만으로 재시도
+async function getMediaStreamSafe(
+  callType: "VOICE" | "VIDEO"
+): Promise<{ stream: MediaStream; actualType: "VOICE" | "VIDEO" }> {
+  // 1차 시도: 요청한 그대로
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: callType === "VIDEO",
+    });
+    return { stream, actualType: callType };
+  } catch (err) {
+    // 영상통화인데 카메라 없는 경우 → audio만으로 재시도
+    if (
+      callType === "VIDEO" &&
+      err instanceof Error &&
+      (err.name === "NotFoundError" || err.name === "DevicesNotFoundError")
+    ) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false,
+        });
+        toast.error?.("카메라를 찾을 수 없어 음성 통화로 전환합니다.");
+        return { stream, actualType: "VOICE" };
+      } catch (fallbackErr) {
+        throw fallbackErr; // 오디오도 실패하면 포기
+      }
+    }
+    throw err;
+  }
+}
 
 export function useSocket() {
   const { data: session } = useSession();
@@ -117,26 +174,23 @@ export function useChatRoom(chatRoomId: string | null) {
 
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-      // ✅ [BUG-2 수정] createPC에서 빈 stream 선점하지 않음
-      // ontrack에서 실제 트랙이 도착할 때 setRemoteStream 호출
+      // [BUG-2 수정 유지] createPC에서 빈 stream 선점하지 않음
       remoteStreamRef.current = null;
 
       pc.ontrack = (event) => {
-        // ✅ [BUG-4 수정] event.streams[0] undefined 방어
+        // [BUG-4 수정 유지] event.streams[0] undefined 방어
         const incomingStream = event.streams?.[0];
 
         if (incomingStream) {
-          // streams[0]가 있으면 그대로 사용
           remoteStreamRef.current = incomingStream;
         } else {
-          // streams 없이 track만 오는 경우 (Safari 등)
           if (!remoteStreamRef.current) {
             remoteStreamRef.current = new MediaStream();
           }
           remoteStreamRef.current.addTrack(event.track);
         }
 
-        // ✅ [BUG-2 수정] 트랙 도착할 때마다 setRemoteStream 호출 → React 재렌더
+        // [BUG-2 수정 유지] 트랙 도착 시 setRemoteStream → React 재렌더
         setRemoteStream(remoteStreamRef.current);
       };
 
@@ -151,11 +205,9 @@ export function useChatRoom(chatRoomId: string | null) {
 
       pc.oniceconnectionstatechange = () => {
         const state = pc.iceConnectionState;
-
         if (state === "connected" || state === "completed") {
           setCallStatus("connected");
         }
-
         if (state === "failed") {
           try { pc.restartIce(); } catch {}
         }
@@ -170,13 +222,9 @@ export function useChatRoom(chatRoomId: string | null) {
   const flushIce = useCallback(async () => {
     const pc = pcRef.current;
     if (!pc) return;
-
     for (const c of iceBufRef.current) {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(c));
-      } catch {}
+      try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
     }
-
     iceBufRef.current = [];
   }, []);
 
@@ -200,14 +248,25 @@ export function useChatRoom(chatRoomId: string | null) {
     async (callType: "VOICE" | "VIDEO", otherUserId?: string) => {
       if (!socket || callStatus !== "idle" || !otherUserId) return;
 
+      // ✅ [FIX-1] 먼저 디바이스 확인 — 실패해도 callStatus 변경 없이 조기 반환
+      let stream: MediaStream;
+      let actualCallType: "VOICE" | "VIDEO";
+
+      try {
+        const result = await getMediaStreamSafe(callType);
+        stream = result.stream;
+        actualCallType = result.actualType;
+      } catch (err) {
+        // ✅ [FIX-1] 에러 메시지를 사용자에게 표시
+        toast.error?.(getMediaErrorMessage(err));
+        console.error("[WebRTC] getUserMedia 실패:", err);
+        return; // callStatus는 "idle" 그대로 유지
+      }
+
+      // 여기서부터는 stream 확보된 상태
       try {
         callTargetRef.current = otherUserId;
         setCallStatus("calling");
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: callType === "VIDEO",
-        });
 
         localStreamRef.current = stream;
         setLocalStream(stream);
@@ -221,11 +280,12 @@ export function useChatRoom(chatRoomId: string | null) {
         socket.emit("call:start", {
           receiverId: otherUserId,
           chatRoomId,
-          callType,
+          callType: actualCallType,
           offer: pc.localDescription,
         });
       } catch (err) {
-        console.error(err);
+        console.error("[WebRTC] initiateCall 오류:", err);
+        toast.error?.("통화 연결 중 오류가 발생했습니다.");
         cleanupCall();
         setCallStatus("idle");
       }
@@ -236,14 +296,25 @@ export function useChatRoom(chatRoomId: string | null) {
   const acceptCall = useCallback(async () => {
     if (!incomingCall || !socket) return;
 
-    try {
-      const { callerId, offer, callType } = incomingCall;
-      callTargetRef.current = callerId;
+    const { callerId, offer, callType } = incomingCall;
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: callType === "VIDEO",
-      });
+    // ✅ [FIX-1] acceptCall도 동일하게 처리
+    let stream: MediaStream;
+    try {
+      const result = await getMediaStreamSafe(callType);
+      stream = result.stream;
+    } catch (err) {
+      toast.error?.(getMediaErrorMessage(err));
+      console.error("[WebRTC] acceptCall getUserMedia 실패:", err);
+      // 수신 거절 처리
+      socket.emit("call:reject", { callerId });
+      setIncomingCall(null);
+      setCallStatus("idle");
+      return;
+    }
+
+    try {
+      callTargetRef.current = callerId;
 
       localStreamRef.current = stream;
       setLocalStream(stream);
@@ -253,7 +324,7 @@ export function useChatRoom(chatRoomId: string | null) {
 
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
-      // ✅ [BUG-1 수정] setRemoteDescription 직후 true로 세팅
+      // [BUG-1 수정 유지]
       remoteDescSetRef.current = true;
       await flushIce();
 
@@ -268,7 +339,8 @@ export function useChatRoom(chatRoomId: string | null) {
       setIncomingCall(null);
       setCallStatus("connected");
     } catch (err) {
-      console.error(err);
+      console.error("[WebRTC] acceptCall 오류:", err);
+      toast.error?.("통화 수락 중 오류가 발생했습니다.");
       cleanupCall();
       setCallStatus("idle");
     }
@@ -276,7 +348,6 @@ export function useChatRoom(chatRoomId: string | null) {
 
   const rejectCall = useCallback(() => {
     if (!incomingCall || !socket) return;
-
     socket.emit("call:reject", { callerId: incomingCall.callerId });
     setIncomingCall(null);
     setCallStatus("idle");
@@ -286,7 +357,6 @@ export function useChatRoom(chatRoomId: string | null) {
     if (socket && callTargetRef.current) {
       socket.emit("call:end", { otherUserId: callTargetRef.current });
     }
-
     cleanupCall();
     setCallStatus("ended");
   }, [socket, cleanupCall]);
@@ -349,7 +419,7 @@ export function useChatRoom(chatRoomId: string | null) {
         await pcRef.current?.setRemoteDescription(
           new RTCSessionDescription(answer)
         );
-        // ✅ [BUG-1 수정] setRemoteDescription 직후 true로 세팅
+        // [BUG-1 수정 유지]
         remoteDescSetRef.current = true;
         await flushIce();
         setCallStatus("connected");
@@ -361,7 +431,6 @@ export function useChatRoom(chatRoomId: string | null) {
         iceBufRef.current.push(candidate);
         return;
       }
-
       try {
         await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
       } catch {}
@@ -372,10 +441,16 @@ export function useChatRoom(chatRoomId: string | null) {
       setCallStatus("idle");
     });
 
-    // ✅ [BUG-3 수정] "call:end" → "call:ended" (서버가 emitToUser로 보내는 이벤트명)
+    // [BUG-3 수정 유지] "call:ended"
     socket.on("call:ended", () => {
       cleanupCall();
       setCallStatus("ended");
+    });
+
+    socket.on("call:user-offline", () => {
+      toast.error?.("상대방이 오프라인 상태입니다.");
+      cleanupCall();
+      setCallStatus("idle");
     });
 
     return () => {
@@ -384,6 +459,7 @@ export function useChatRoom(chatRoomId: string | null) {
       socket.off("call:ice-candidate");
       socket.off("call:rejected");
       socket.off("call:ended");
+      socket.off("call:user-offline");
     };
   }, [socket, flushIce, cleanupCall]);
 

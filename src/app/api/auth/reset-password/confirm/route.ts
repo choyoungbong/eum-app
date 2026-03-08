@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import bcrypt from "bcryptjs";
+// ✅ [UI/UX-2] 인라인 비밀번호 검증 제거 → 공통 passwordSchema 사용
+import { passwordSchema } from "@/lib/validators";
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,9 +12,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "유효하지 않은 요청입니다" }, { status: 400 });
     }
 
-    if (password.length < 8 || !/(?=.*[a-zA-Z])(?=.*\d)/.test(password)) {
+    // ✅ [UI/UX-2] 기존 인라인 검증(password.length < 8 || !/regex/.test()) 제거
+    // → passwordSchema로 통일 (register/change-password와 동일한 규칙 보장)
+    const validation = passwordSchema.safeParse(password);
+    if (!validation.success) {
       return NextResponse.json(
-        { error: "비밀번호는 8자 이상, 영문+숫자 조합이어야 합니다" },
+        { error: validation.error.errors[0].message },
         { status: 400 }
       );
     }

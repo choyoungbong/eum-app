@@ -1,15 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { hash } from "bcryptjs"; // ✅ bcrypt → bcryptjs
-import { z } from "zod";
+import { hash } from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { DEMO_MODE } from "@/lib/demo-mode";
-
-const signupSchema = z.object({
-  email: z.string().email("유효한 이메일을 입력하세요"),
-  password: z.string().min(8, "비밀번호는 최소 8자 이상이어야 합니다"),
-  name: z.string().min(2, "이름은 최소 2자 이상이어야 합니다"),
-  marketingConsent: z.boolean().optional(),
-});
+// ✅ [UI/UX-2] 로컬 signupSchema 제거 → 공통 registerSchema 사용
+import { registerSchema } from "@/lib/validators";
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,7 +18,9 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const validation = signupSchema.safeParse(body);
+    // ✅ [UI/UX-2] registerSchema는 validators.ts의 공통 passwordSchema를 사용
+    // → register / reset-password / change-password 규칙이 항상 동일하게 유지됨
+    const validation = registerSchema.safeParse(body);
 
     if (!validation.success) {
       return NextResponse.json(

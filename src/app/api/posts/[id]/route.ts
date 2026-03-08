@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/db";
+import logger from "@/lib/logger"; // ✅ [품질-1] 기존 logger 활용
 
 // 게시글 상세 조회
 export async function GET(
@@ -72,14 +73,17 @@ export async function GET(
     // 접근 권한 확인
     const canView = isOwner || isPublic || isShared;
 
-    console.log("=== 게시글 접근 확인 ===");
-    console.log("사용자 ID:", session.user.id);
-    console.log("게시글 소유자:", post.userId);
-    console.log("공개 설정:", post.visibility);
-    console.log("소유자:", isOwner);
-    console.log("공개 글:", isPublic);
-    console.log("공유받음:", isShared);
-    console.log("접근 가능:", canView);
+    // ✅ [품질-1] console.log → logger.debug 로 교체
+    // debug 레벨은 프로덕션에서 출력되지 않으므로 민감 정보 노출 방지
+    logger.debug("post_access_check", {
+      postId,
+      userId: session.user.id,
+      visibility: post.visibility,
+      isOwner,
+      isPublic,
+      isShared,
+      canView,
+    });
 
     if (!canView) {
       return NextResponse.json(
@@ -91,7 +95,7 @@ export async function GET(
     return NextResponse.json({ post });
 
   } catch (error) {
-    console.error("Post fetch error:", error);
+    logger.error("post_fetch_error", { error });
     return NextResponse.json(
       { error: "게시글 조회 중 오류가 발생했습니다" },
       { status: 500 }
@@ -157,7 +161,7 @@ export async function PUT(
     });
 
   } catch (error) {
-    console.error("Post update error:", error);
+    logger.error("post_update_error", { error });
     return NextResponse.json(
       { error: "게시글 수정 중 오류가 발생했습니다" },
       { status: 500 }
@@ -208,7 +212,7 @@ export async function DELETE(
     });
 
   } catch (error) {
-    console.error("Post delete error:", error);
+    logger.error("post_delete_error", { error });
     return NextResponse.json(
       { error: "게시글 삭제 중 오류가 발생했습니다" },
       { status: 500 }

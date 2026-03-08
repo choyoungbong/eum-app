@@ -15,16 +15,21 @@ export const paginationSchema = z.object({
 
 export const idSchema = z.string().cuid({ message: "유효하지 않은 ID입니다" });
 
+// ✅ [UI/UX-2] 공통 passwordSchema — 모든 인증 관련 API에서 공유
+// register, reset-password, change-password 규칙을 통일하여 불일치 방지
+export const passwordSchema = z
+  .string()
+  .min(8, "비밀번호는 8자 이상이어야 합니다")
+  .max(100, "비밀번호는 100자 이하이어야 합니다")
+  .regex(/[a-zA-Z]/, "영문자를 포함해야 합니다")
+  .regex(/[0-9]/, "숫자를 포함해야 합니다");
+
 // ── 인증 ─────────────────────────────────────────────────
 export const registerSchema = z.object({
   name:     z.string().min(2, "이름은 2자 이상이어야 합니다").max(50),
   email:    z.string().email("올바른 이메일 형식이 아닙니다"),
-  password: z.string()
-    .min(8,  "비밀번호는 8자 이상이어야 합니다")
-    .max(100)
-    .regex(/[A-Z]/,  "대문자를 포함해야 합니다")
-    .regex(/[0-9]/,  "숫자를 포함해야 합니다")
-    .regex(/[^A-Za-z0-9]/, "특수문자를 포함해야 합니다"),
+  // ✅ [UI/UX-2] 공통 passwordSchema 사용
+  password: passwordSchema,
 });
 
 export const loginSchema = z.object({
@@ -34,7 +39,8 @@ export const loginSchema = z.object({
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, "현재 비밀번호를 입력해주세요"),
-  newPassword:     z.string().min(8, "새 비밀번호는 8자 이상이어야 합니다"),
+  // ✅ [UI/UX-2] 공통 passwordSchema 사용
+  newPassword: passwordSchema,
 }).refine((d) => d.currentPassword !== d.newPassword, {
   message: "새 비밀번호는 현재 비밀번호와 달라야 합니다",
   path:    ["newPassword"],
@@ -83,17 +89,17 @@ export const sendMessageSchema = z.object({
 
 // ── 알림 설정 ─────────────────────────────────────────────
 export const notificationSettingsSchema = z.object({
-  emailNotifications:  z.boolean().optional(),
-  pushNotifications:   z.boolean().optional(),
-  chatNotifications:   z.boolean().optional(),
+  emailNotifications:   z.boolean().optional(),
+  pushNotifications:    z.boolean().optional(),
+  chatNotifications:    z.boolean().optional(),
   mentionNotifications: z.boolean().optional(),
 });
 
 // ── API 키 ────────────────────────────────────────────────
 export const createApiKeySchema = z.object({
-  name:           z.string().min(1, "이름을 입력해주세요").max(100),
-  scopes:         z.array(z.string()).min(1, "권한을 하나 이상 선택해주세요"),
-  expiresInDays:  z.number().int().min(0).max(365).optional(),
+  name:          z.string().min(1, "이름을 입력해주세요").max(100),
+  scopes:        z.array(z.string()).min(1, "권한을 하나 이상 선택해주세요"),
+  expiresInDays: z.number().int().min(0).max(365).optional(),
 });
 
 // ── 시스템 공지 ───────────────────────────────────────────

@@ -1,6 +1,7 @@
 // src/lib/emit-notification.ts
 import { prisma } from "@/lib/db";
 import { Prisma } from "@prisma/client";
+import type { Server } from "socket.io";
 
 export type NotificationType =
   | "SYSTEM"
@@ -16,8 +17,13 @@ interface EmitNotificationParams {
   message:   string;
   type:      NotificationType;
   link?:     string;
-  // ✅ 수정: Record<string, unknown> → Prisma.InputJsonValue (빌드 타입 오류 해결)
+  // ✅ Record<string, unknown> → Prisma.InputJsonValue (빌드 타입 오류 해결)
   metadata?: Prisma.InputJsonValue;
+}
+
+// ✅ [품질] (global as any).io → 타입 안전한 헬퍼로 교체
+function getIO(): Server | null {
+  return (global as { io?: Server }).io ?? null;
 }
 
 // ─── 단건 알림 생성 ───────────────────────────────────────
@@ -38,7 +44,8 @@ export async function emitNotification(
       },
     });
 
-    const io = (global as any).io;
+    // ✅ DB 저장 후 실시간 소켓 전송
+    const io = getIO();
     if (io) {
       io.to(`user:${userId}`).emit("notification:new", notification);
     }
@@ -71,7 +78,8 @@ export async function emitNotificationToMany(
       skipDuplicates: true,
     });
 
-    const io = (global as any).io;
+    // ✅ DB 저장 후 전체 유저에게 실시간 소켓 전송
+    const io = getIO();
     if (io) {
       userIds.forEach((userId) => {
         io.to(`user:${userId}`).emit("notification:new", {

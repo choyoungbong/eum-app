@@ -44,22 +44,18 @@ export async function GET(request: NextRequest) {
 
     // 2. 조회 조건 구성
     let where: any = {};
-    
+
     if (visibility === "my") {
-      // 내 글만
       where.userId = session.user.id;
     } else if (visibility === "public") {
-      // 공개 글만
       where.visibility = "PUBLIC";
     } else if (visibility === "shared") {
-      // 나에게 공유된 글만
       where.id = { in: sharedPostIds };
     } else {
-      // 전체 (기본)
       where.OR = [
-        { userId: session.user.id },           // 내가 작성한 글
-        { visibility: "PUBLIC" },              // 공개 글
-        { id: { in: sharedPostIds } },         // 나에게 공유된 글
+        { userId: session.user.id },
+        { visibility: "PUBLIC" },
+        { id: { in: sharedPostIds } },
       ];
     }
 
@@ -73,10 +69,7 @@ export async function GET(request: NextRequest) {
       };
 
       if (where.OR) {
-        where.AND = [
-          { OR: where.OR },
-          searchCondition,
-        ];
+        where.AND = [{ OR: where.OR }, searchCondition];
         delete where.OR;
       } else {
         where.AND = [searchCondition];
@@ -107,44 +100,44 @@ export async function GET(request: NextRequest) {
       prisma.post.count({ where }),
     ]);
 
-    // 3. 각 게시글에 공유 정보 추가
-    const postsWithShareInfo = await Promise.all(
-      posts.map(async (post) => {
-        const isShared = sharedPostIds.includes(post.id);
-        let sharedBy = null;
+    // ✅ [성능-1] N+1 쿼리 → 단일 IN 쿼리로 최적화
+    // 기존: posts.map(async post => prisma.sharedResource.findFirst(...)) → 게시글 수만큼 쿼리 발생
+    // 개선: 조회된 게시글 ID 전체를 한 번에 조회 → Map으로 O(1) 탐색
+    const postIds = posts.map((p) => p.id);
 
-        if (isShared && post.userId !== session.user.id) {
-          // 공유받은 게시글인 경우 공유자 정보 조회
-          const shareInfo = await prisma.sharedResource.findFirst({
-            where: {
-              resourceType: "POST",
-              resourceId: post.id,
-              sharedWithId: session.user.id,
-            },
-            include: {
-              owner: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                },
-              },
-            },
-          });
+    const shareInfoList = await prisma.sharedResource.findMany({
+      where: {
+        resourceType: "POST",
+        resourceId: { in: postIds },
+        sharedWithId: session.user.id,
+      },
+      include: {
+        owner: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
 
-          if (shareInfo) {
-            sharedBy = shareInfo.owner.name;
-          }
-        }
+    // resourceId → shareInfo Map 구성
+    const shareMap = new Map(shareInfoList.map((s) => [s.resourceId, s]));
 
-        return {
-          ...post,
-          isOwner: post.userId === session.user.id,
-          isShared: isShared && post.userId !== session.user.id,
-          sharedBy,
-        };
-      })
-    );
+    // 3. 공유 정보 병합 (추가 쿼리 없음)
+    const postsWithShareInfo = posts.map((post) => {
+      const shareInfo = shareMap.get(post.id);
+      const isShared = !!shareInfo && post.userId !== session.user.id;
+      const sharedBy = isShared ? shareInfo!.owner.name : null;
+
+      return {
+        ...post,
+        isOwner: post.userId === session.user.id,
+        isShared,
+        sharedBy,
+      };
+    });
 
     return NextResponse.json({
       posts: postsWithShareInfo,

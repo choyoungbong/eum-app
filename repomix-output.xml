@@ -149,6 +149,7 @@ src/app/api/users/me/export/route.ts
 src/app/api/users/me/onboarding/route.ts
 src/app/api/users/me/route.ts
 src/app/api/users/me/sessions/route.ts
+src/app/api/users/me/storage/route.ts
 src/app/api/users/mention-search/route.ts
 src/app/api/users/presence/route.ts
 src/app/api/users/search/route.ts
@@ -1330,31 +1331,49 @@ export async function PATCH(
   });
 }
 
-// ─────────────────────────────────────────────────────────
-// src/app/api/users/me/storage/route.ts
-// GET — 내 저장 사용량 조회
-// ─────────────────────────────────────────────────────────
+// ✅ [구조-2] GET 핸들러 제거
+// 내 저장 사용량 조회는 src/app/api/users/me/storage/route.ts 로 분리됨
+</file>
 
-export async function GET(request: NextRequest) {
-  const { getServerSession } = await import("next-auth");
-  const { authOptions } = await import("@/app/api/auth/[...nextauth]/route");
+<file path="src/app/api/admin/users/route.ts">
+// src/app/api/admin/users/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { prisma } from "@/lib/db";
+
+async function requireAdmin() {
   const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
+  if (!session?.user) return null;
+  const user = await prisma.user.findUnique({ where: { id: session.user.id } });
+  if (!user || user.role !== "ADMIN") return null;
+  return user;
+}
 
-  const user = await prisma.user.findUnique({
-    where: { id: session.user.id },
-    select: { storageUsed: true, storageLimit: true },
+// GET /api/admin/users — 전체 사용자 목록
+export async function GET(request: NextRequest) {
+  const admin = await requireAdmin();
+  if (!admin) {
+    return NextResponse.json({ error: "관리자 권한이 필요합니다" }, { status: 403 });
+  }
+
+  const users = await prisma.user.findMany({
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      emailVerified: true,
+      isOnline: true,
+      createdAt: true,
+      _count: {
+        select: { files: true, posts: true, comments: true },
+      },
+    },
   });
 
-  const used  = user?.storageUsed  ?? BigInt(0);
-  const limit = user?.storageLimit ?? BigInt(5 * 1024 * 1024 * 1024);
-  const pct   = limit > 0 ? Math.round(Number((used * BigInt(100)) / limit)) : 0;
-
-  return NextResponse.json({
-    storageUsed:  used.toString(),
-    storageLimit: limit.toString(),
-    percentage:   pct,
-  });
+  return NextResponse.json(users);
 }
 </file>
 
@@ -1377,6 +1396,21 @@ export { handler as GET, handler as POST };
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 
+// ✅ [보안-3] 항상 동일한 메시지 + 일정한 응답 시간으로 User Enumeration 방지
+const CONSTANT_RESPONSE_MS = 300; // 항상 최소 이 시간만큼 대기
+
+// 일정 응답 시간 보장 헬퍼 (타이밍 공격 방지)
+async function withConstantTime<T>(fn: () => Promise<T>): Promise<T> {
+  const start = Date.now();
+  const result = await fn();
+  const elapsed = Date.now() - start;
+  const remaining = CONSTANT_RESPONSE_MS - elapsed;
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+  return result;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { name } = await request.json();
@@ -1384,23 +1418,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "이름을 입력하세요" }, { status: 400 });
     }
 
-    const user = await prisma.user.findFirst({
-      where: { name: { equals: name.trim(), mode: "insensitive" } },
+    const maskedEmail = await withConstantTime(async () => {
+      const user = await prisma.user.findFirst({
+        where: { name: { equals: name.trim(), mode: "insensitive" } },
+      });
+
+      // ✅ [보안-3] 유저 미존재 시에도 404 대신 null 반환 (호출자가 구분 불가)
+      if (!user) return null;
+
+      // 이메일 마스킹: ab***@gmail.com
+      const [localPart, domain] = user.email.split("@");
+      return (
+        localPart.slice(0, 2) +
+        "*".repeat(Math.max(3, localPart.length - 2)) +
+        "@" +
+        domain
+      );
     });
 
-    if (!user) {
-      return NextResponse.json(
-        { error: "해당 이름으로 가입된 계정을 찾을 수 없습니다" },
-        { status: 404 }
-      );
-    }
-
-    // 이메일 마스킹: ab***@gmail.com
-    const [localPart, domain] = user.email.split("@");
-    const masked =
-      localPart.slice(0, 2) + "*".repeat(Math.max(3, localPart.length - 2)) + "@" + domain;
-
-    return NextResponse.json({ maskedEmail: masked });
+    // ✅ [보안-3] 유저 존재 여부와 관계없이 항상 200 + 동일한 구조로 응답
+    // 클라이언트: maskedEmail이 null이면 "일치하는 계정이 없습니다" 안내
+    return NextResponse.json({ maskedEmail });
   } catch (error) {
     console.error("Find email error:", error);
     return NextResponse.json({ error: "서버 오류" }, { status: 500 });
@@ -1409,9 +1447,24 @@ export async function POST(request: NextRequest) {
 </file>
 
 <file path="src/app/api/auth/find-email/send/route.ts">
+// src/app/api/auth/find-email/send/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
+
+// ✅ [보안-3] 항상 최소 이 시간만큼 대기 (타이밍 공격 방지)
+const CONSTANT_RESPONSE_MS = 300;
+
+async function withConstantTime<T>(fn: () => Promise<T>): Promise<T> {
+  const start = Date.now();
+  const result = await fn();
+  const elapsed = Date.now() - start;
+  const remaining = CONSTANT_RESPONSE_MS - elapsed;
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+  return result;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -1421,39 +1474,42 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "이름을 입력하세요" }, { status: 400 });
     }
 
-    const user = await prisma.user.findFirst({
-      where: { name: { equals: name.trim(), mode: "insensitive" } },
-    });
+    await withConstantTime(async () => {
+      const user = await prisma.user.findFirst({
+        where: { name: { equals: name.trim(), mode: "insensitive" } },
+      });
 
-    if (!user) {
-      return NextResponse.json({ error: "계정을 찾을 수 없습니다" }, { status: 404 });
-    }
+      // ✅ [보안-3] 유저 미존재 시 404 대신 조용히 종료 (응답은 항상 200)
+      // 공격자가 가입 여부를 이메일 발송 성공/실패로 판단하는 것을 방지
+      if (!user) return;
 
-    await sendEmail({
-      to: user.email,
-      subject: "[이음] 이메일 찾기 안내",
-      html: `
-        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px;">
-          <h2 style="color: #7c3aed; margin-bottom: 8px;">이음 (Eum)</h2>
-          <p style="color: #666; margin-bottom: 24px;">사람과 파일을 잇다</p>
-          <hr style="border: none; border-top: 1px solid #eee; margin-bottom: 24px;"/>
-          <h3 style="color: #111; margin-bottom: 16px;">이메일 찾기</h3>
-          <p style="color: #444; margin-bottom: 8px;">안녕하세요, <strong>${user.name}</strong>님!</p>
-          <p style="color: #444; margin-bottom: 24px;">
-            요청하신 이음 계정의 이메일 주소입니다:
-          </p>
-          <div style="background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px;">
-            <p style="font-size: 20px; font-weight: 700; color: #7c3aed; margin: 0;">${user.email}</p>
+      await sendEmail({
+        to: user.email,
+        subject: "[이음] 이메일 찾기 안내",
+        html: `
+          <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px;">
+            <h2 style="color: #7c3aed; margin-bottom: 8px;">이음 (Eum)</h2>
+            <p style="color: #666; margin-bottom: 24px;">사람과 파일을 잇다</p>
+            <hr style="border: none; border-top: 1px solid #eee; margin-bottom: 24px;"/>
+            <h3 style="color: #111; margin-bottom: 16px;">이메일 찾기</h3>
+            <p style="color: #444; margin-bottom: 8px;">안녕하세요, <strong>${user.name}</strong>님!</p>
+            <p style="color: #444; margin-bottom: 24px;">
+              요청하신 이음 계정의 이메일 주소입니다:
+            </p>
+            <div style="background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px;">
+              <p style="font-size: 20px; font-weight: 700; color: #7c3aed; margin: 0;">${user.email}</p>
+            </div>
+            <p style="color: #888; font-size: 13px;">
+              본인이 요청하지 않으셨다면 이 메일을 무시해 주세요.
+            </p>
+            <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;"/>
+            <p style="color: #aaa; font-size: 12px;">© 2025 이음(Eum)</p>
           </div>
-          <p style="color: #888; font-size: 13px;">
-            본인이 요청하지 않으셨다면 이 메일을 무시해 주세요.
-          </p>
-          <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;"/>
-          <p style="color: #aaa; font-size: 12px;">© 2025 이음(Eum)</p>
-        </div>
-      `,
+        `,
+      });
     });
 
+    // ✅ [보안-3] 유저 존재 여부와 관계없이 항상 동일한 200 응답
     return NextResponse.json({ message: "이메일이 발송되었습니다" });
   } catch (error) {
     console.error("Send email error:", error);
@@ -1464,17 +1520,11 @@ export async function POST(request: NextRequest) {
 
 <file path="src/app/api/auth/register/route.ts">
 import { NextRequest, NextResponse } from "next/server";
-import { hash } from "bcryptjs"; // ✅ bcrypt → bcryptjs
-import { z } from "zod";
+import { hash } from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { DEMO_MODE } from "@/lib/demo-mode";
-
-const signupSchema = z.object({
-  email: z.string().email("유효한 이메일을 입력하세요"),
-  password: z.string().min(8, "비밀번호는 최소 8자 이상이어야 합니다"),
-  name: z.string().min(2, "이름은 최소 2자 이상이어야 합니다"),
-  marketingConsent: z.boolean().optional(),
-});
+// ✅ [UI/UX-2] 로컬 signupSchema 제거 → 공통 registerSchema 사용
+import { registerSchema } from "@/lib/validators";
 
 export async function POST(request: NextRequest) {
   try {
@@ -1489,7 +1539,9 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const validation = signupSchema.safeParse(body);
+    // ✅ [UI/UX-2] registerSchema는 validators.ts의 공통 passwordSchema를 사용
+    // → register / reset-password / change-password 규칙이 항상 동일하게 유지됨
+    const validation = registerSchema.safeParse(body);
 
     if (!validation.success) {
       return NextResponse.json(
@@ -1541,6 +1593,8 @@ export async function POST(request: NextRequest) {
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import bcrypt from "bcryptjs";
+// ✅ [UI/UX-2] 인라인 비밀번호 검증 제거 → 공통 passwordSchema 사용
+import { passwordSchema } from "@/lib/validators";
 
 export async function POST(request: NextRequest) {
   try {
@@ -1550,9 +1604,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "유효하지 않은 요청입니다" }, { status: 400 });
     }
 
-    if (password.length < 8 || !/(?=.*[a-zA-Z])(?=.*\d)/.test(password)) {
+    // ✅ [UI/UX-2] 기존 인라인 검증(password.length < 8 || !/regex/.test()) 제거
+    // → passwordSchema로 통일 (register/change-password와 동일한 규칙 보장)
+    const validation = passwordSchema.safeParse(password);
+    if (!validation.success) {
       return NextResponse.json(
-        { error: "비밀번호는 8자 이상, 영문+숫자 조합이어야 합니다" },
+        { error: validation.error.errors[0].message },
         { status: 400 }
       );
     }
@@ -2152,7 +2209,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/db";
-import { createReadStream } from "fs";
+import { createReadStream } from "fs"; // ✅ [품질-2] 이제 실제로 사용
 import { stat } from "fs/promises";
 
 export async function GET(
@@ -2184,7 +2241,7 @@ export async function GET(
 
     // 권한 확인 (소유자 또는 공유받은 사용자)
     const isOwner = file.userId === session.user.id;
-    
+
     if (!isOwner) {
       const sharedResource = await prisma.sharedResource.findFirst({
         where: {
@@ -2205,30 +2262,45 @@ export async function GET(
     // 파일 존재 확인
     try {
       await stat(file.filepath);
-    } catch (error) {
+    } catch {
       return NextResponse.json(
         { error: "파일이 존재하지 않습니다" },
         { status: 404 }
       );
     }
 
-    // 파일 스트림 읽기
-    const fileStream = createReadStream(file.filepath);
-    const chunks: Buffer[] = [];
+    // ✅ [성능-2] 전체 메모리 로드(Buffer.concat) → ReadableStream 스트리밍으로 교체
+    // 기존: 파일 전체를 chunks 배열로 메모리에 올린 후 응답 → 대용량 파일 시 OOM 위험
+    // 개선: Node.js ReadableStream을 Web ReadableStream으로 래핑하여 청크 단위로 전송
+    const nodeStream = createReadStream(file.filepath);
 
-    for await (const chunk of fileStream) {
-      chunks.push(Buffer.from(chunk));
-    }
+    const webStream = new ReadableStream({
+      start(controller) {
+        nodeStream.on("data", (chunk) => {
+          controller.enqueue(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        });
+        nodeStream.on("end", () => {
+          controller.close();
+        });
+        nodeStream.on("error", (err) => {
+          controller.error(err);
+        });
+      },
+      cancel() {
+        // 클라이언트가 다운로드를 취소한 경우 스트림 정리
+        nodeStream.destroy();
+      },
+    });
 
-    const buffer = Buffer.concat(chunks);
-
-    // 파일 다운로드 응답
-    return new NextResponse(buffer, {
+    return new NextResponse(webStream, {
       status: 200,
       headers: {
         "Content-Type": file.mimeType,
         "Content-Disposition": `attachment; filename="${encodeURIComponent(file.originalName)}"`,
-        "Content-Length": buffer.length.toString(),
+        // ✅ BigInt → Number 변환 (Content-Length는 문자열 숫자여야 함)
+        "Content-Length": file.size.toString(),
+        // ✅ 스트리밍 다운로드 진행률 표시를 위해 Accept-Ranges 허용
+        "Accept-Ranges": "bytes",
       },
     });
   } catch (error) {
@@ -2587,7 +2659,7 @@ export async function DELETE(
 <file path="src/app/api/files/thumbnail/[filename]/route.ts">
 import { NextRequest, NextResponse } from "next/server";
 import { readFile } from "fs/promises";
-import { join } from "path";
+import { join, basename, resolve } from "path";
 import { existsSync } from "fs";
 
 const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
@@ -2597,20 +2669,54 @@ export async function GET(
   { params }: { params: { filename: string } }
 ) {
   try {
-    const thumbnailPath = join(STORAGE_PATH, "thumbnails", params.filename);
+    // ✅ [보안-1] Path Traversal 방지
+    // basename()으로 디렉터리 경로 제거 (예: ../../etc/passwd → passwd)
+    const safeFilename = basename(params.filename);
 
-    if (!existsSync(thumbnailPath)) {
+    // 빈 파일명 또는 숨김 파일 차단
+    if (!safeFilename || safeFilename.startsWith(".")) {
+      return NextResponse.json(
+        { error: "잘못된 요청입니다" },
+        { status: 400 }
+      );
+    }
+
+    const thumbnailPath = join(STORAGE_PATH, "thumbnails", safeFilename);
+
+    // ✅ resolve()로 최종 경로가 thumbnails 디렉터리 내부인지 2차 검증
+    const resolvedPath = resolve(thumbnailPath);
+    const resolvedBase = resolve(join(STORAGE_PATH, "thumbnails"));
+
+    if (!resolvedPath.startsWith(resolvedBase + "/") && resolvedPath !== resolvedBase) {
+      return NextResponse.json(
+        { error: "잘못된 요청입니다" },
+        { status: 400 }
+      );
+    }
+
+    if (!existsSync(resolvedPath)) {
       return NextResponse.json(
         { error: "썸네일을 찾을 수 없습니다" },
         { status: 404 }
       );
     }
 
-    const fileBuffer = await readFile(thumbnailPath);
+    const fileBuffer = await readFile(resolvedPath);
+
+    // ✅ 확장자 기반 Content-Type 설정 (jpeg 고정 → 실제 파일 타입 반영)
+    const ext = safeFilename.split(".").pop()?.toLowerCase();
+    const contentTypeMap: Record<string, string> = {
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      webp: "image/webp",
+      gif: "image/gif",
+    };
+    const contentType = contentTypeMap[ext ?? ""] ?? "image/jpeg";
 
     return new NextResponse(fileBuffer, {
       headers: {
-        "Content-Type": "image/jpeg",
+        "Content-Type": contentType,
         "Cache-Control": "public, max-age=31536000, immutable",
       },
     });
@@ -2634,9 +2740,46 @@ import { existsSync } from "fs";
 import { join } from "path";
 import crypto from "crypto";
 import sharp from "sharp";
+import { fileTypeFromBuffer } from "file-type"; // ✅ [보안-2] magic bytes 검증용 (npm install file-type)
 
 const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
 const MAX_FILE_SIZE = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE || "52428800"); // 50MB
+
+// ✅ [보안-2] 허용 MIME 타입 화이트리스트
+const ALLOWED_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+  "video/mp4",
+  "video/webm",
+  "application/zip",
+  "text/plain",
+]);
+
+// ✅ [보안-4] Rate Limiting: 유저별 업로드 횟수 인메모리 추적
+// 프로덕션에서는 Redis 기반 rate-limit 라이브러리로 교체 권장
+const uploadRateMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT = 10;        // 최대 횟수
+const RATE_WINDOW_MS = 60_000; // 1분
+
+function checkRateLimit(userId: string): { allowed: boolean; retryAfter?: number } {
+  const now = Date.now();
+  const entry = uploadRateMap.get(userId);
+
+  if (!entry || now > entry.resetAt) {
+    uploadRateMap.set(userId, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return { allowed: true };
+  }
+
+  if (entry.count >= RATE_LIMIT) {
+    return { allowed: false, retryAfter: Math.ceil((entry.resetAt - now) / 1000) };
+  }
+
+  entry.count += 1;
+  return { allowed: true };
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -2644,6 +2787,18 @@ export async function POST(request: NextRequest) {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
+    }
+
+    // ✅ [보안-4] Rate Limiting 체크
+    const rateResult = checkRateLimit(session.user.id);
+    if (!rateResult.allowed) {
+      return NextResponse.json(
+        { error: "잠시 후 다시 시도해주세요. 업로드 한도에 도달했습니다." },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rateResult.retryAfter ?? 60) },
+        }
+      );
     }
 
     const formData = await request.formData();
@@ -2662,14 +2817,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 3. 파일 해시 생성 (중복 체크용)
+    // 3. 파일 버퍼 읽기
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
+
+    // ✅ [보안-2] magic bytes로 실제 MIME 타입 검증 (브라우저 제공값 신뢰 안 함)
+    const detectedType = await fileTypeFromBuffer(buffer);
+
+    // text/plain 은 magic bytes가 없으므로 브라우저 타입으로 fallback
+    const actualMimeType = detectedType?.mime ?? (file.type === "text/plain" ? "text/plain" : null);
+
+    if (!actualMimeType || !ALLOWED_MIME_TYPES.has(actualMimeType)) {
+      return NextResponse.json(
+        {
+          error: "허용되지 않는 파일 형식입니다.",
+          detected: actualMimeType ?? "unknown",
+          allowed: Array.from(ALLOWED_MIME_TYPES),
+        },
+        { status: 400 }
+      );
+    }
+
+    // 4. 파일 해시 생성 (중복 체크용)
     const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
 
     /**
-     * 4. 시스템 전체 중복 확인 (Hash 기반)
-     * DB의 hash 필드에 @unique 제약조건이 있으므로, 
+     * 5. 시스템 전체 중복 확인 (Hash 기반)
+     * DB의 hash 필드에 @unique 제약조건이 있으므로,
      * 다른 유저가 올린 파일이라도 해시가 같으면 create 시 에러가 발생합니다.
      */
     const existingFile = await prisma.file.findFirst({
@@ -2679,42 +2853,42 @@ export async function POST(request: NextRequest) {
     if (existingFile) {
       const isMine = existingFile.userId === session.user.id;
       return NextResponse.json(
-        { 
-          error: isMine 
-            ? "이미 내 보관함에 동일한 파일이 존재합니다." 
+        {
+          error: isMine
+            ? "이미 내 보관함에 동일한 파일이 존재합니다."
             : "이미 시스템에 등록된 동일한 내용의 파일입니다.",
-          existingFile: { id: existingFile.id, originalName: existingFile.originalName } 
+          existingFile: { id: existingFile.id, originalName: existingFile.originalName },
         },
-        { status: 409 } // Conflict
+        { status: 409 }
       );
     }
 
-    // 5. 고유 파일명 및 경로 설정
+    // 6. 고유 파일명 및 경로 설정
     const fileExtension = file.name.split(".").pop() || "bin";
     const uniqueFilename = `${crypto.randomUUID()}.${fileExtension}`;
 
     const uploadDir = join(STORAGE_PATH, "files");
     const thumbnailDir = join(STORAGE_PATH, "thumbnails");
-    
+
     if (!existsSync(uploadDir)) await mkdir(uploadDir, { recursive: true });
     if (!existsSync(thumbnailDir)) await mkdir(thumbnailDir, { recursive: true });
 
-    // 6. 물리 파일 저장
+    // 7. 물리 파일 저장
     const filepath = join(uploadDir, uniqueFilename);
     await writeFile(filepath, buffer);
 
-    // 7. 썸네일 생성 (이미지인 경우만)
+    // 8. 썸네일 생성 (이미지인 경우만, 검증된 MIME 타입 사용)
     let thumbnailUrl: string | null = null;
-    if (file.type.startsWith("image/")) {
+    if (actualMimeType.startsWith("image/")) {
       try {
         const thumbnailFilename = `thumb_${uniqueFilename.replace(/\.\w+$/, ".jpg")}`;
         const thumbnailPath = join(thumbnailDir, thumbnailFilename);
-        
+
         await sharp(buffer)
           .resize(300, 300, { fit: "cover", position: "center" })
           .jpeg({ quality: 80 })
           .toFile(thumbnailPath);
-        
+
         thumbnailUrl = `/api/files/thumbnail/${thumbnailFilename}`;
       } catch (err) {
         console.error("Thumbnail generation failed:", err);
@@ -2723,8 +2897,8 @@ export async function POST(request: NextRequest) {
     }
 
     /**
-     * 8. DB 저장 및 최종 중복 에러 핸들링
-     * findFirst 이후 create 직전에 다른 요청이 들어올 경우를 대비해 
+     * 9. DB 저장 및 최종 중복 에러 핸들링
+     * findFirst 이후 create 직전에 다른 요청이 들어올 경우를 대비해
      * Prisma의 P2002(Unique 제약 위반) 에러를 Catch합니다.
      */
     try {
@@ -2734,7 +2908,7 @@ export async function POST(request: NextRequest) {
           originalName: file.name,
           filepath: filepath,
           size: BigInt(file.size),
-          mimeType: file.type,
+          mimeType: actualMimeType, // ✅ 검증된 실제 MIME 타입으로 저장
           hash: fileHash,
           thumbnailUrl,
           userId: session.user.id,
@@ -2764,9 +2938,8 @@ export async function POST(request: NextRequest) {
           { status: 409 }
         );
       }
-      throw dbError; // 다른 DB 오류는 외부 catch 블록에서 처리
+      throw dbError;
     }
-
   } catch (error) {
     console.error("File upload error:", error);
     return NextResponse.json(
@@ -3084,6 +3257,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/db";
+import logger from "@/lib/logger"; // ✅ [품질-1] 기존 logger 활용
 
 // 게시글 상세 조회
 export async function GET(
@@ -3154,14 +3328,17 @@ export async function GET(
     // 접근 권한 확인
     const canView = isOwner || isPublic || isShared;
 
-    console.log("=== 게시글 접근 확인 ===");
-    console.log("사용자 ID:", session.user.id);
-    console.log("게시글 소유자:", post.userId);
-    console.log("공개 설정:", post.visibility);
-    console.log("소유자:", isOwner);
-    console.log("공개 글:", isPublic);
-    console.log("공유받음:", isShared);
-    console.log("접근 가능:", canView);
+    // ✅ [품질-1] console.log → logger.debug 로 교체
+    // debug 레벨은 프로덕션에서 출력되지 않으므로 민감 정보 노출 방지
+    logger.debug("post_access_check", {
+      postId,
+      userId: session.user.id,
+      visibility: post.visibility,
+      isOwner,
+      isPublic,
+      isShared,
+      canView,
+    });
 
     if (!canView) {
       return NextResponse.json(
@@ -3173,7 +3350,7 @@ export async function GET(
     return NextResponse.json({ post });
 
   } catch (error) {
-    console.error("Post fetch error:", error);
+    logger.error("post_fetch_error", { error });
     return NextResponse.json(
       { error: "게시글 조회 중 오류가 발생했습니다" },
       { status: 500 }
@@ -3239,7 +3416,7 @@ export async function PUT(
     });
 
   } catch (error) {
-    console.error("Post update error:", error);
+    logger.error("post_update_error", { error });
     return NextResponse.json(
       { error: "게시글 수정 중 오류가 발생했습니다" },
       { status: 500 }
@@ -3290,7 +3467,7 @@ export async function DELETE(
     });
 
   } catch (error) {
-    console.error("Post delete error:", error);
+    logger.error("post_delete_error", { error });
     return NextResponse.json(
       { error: "게시글 삭제 중 오류가 발생했습니다" },
       { status: 500 }
@@ -3563,22 +3740,18 @@ export async function GET(request: NextRequest) {
 
     // 2. 조회 조건 구성
     let where: any = {};
-    
+
     if (visibility === "my") {
-      // 내 글만
       where.userId = session.user.id;
     } else if (visibility === "public") {
-      // 공개 글만
       where.visibility = "PUBLIC";
     } else if (visibility === "shared") {
-      // 나에게 공유된 글만
       where.id = { in: sharedPostIds };
     } else {
-      // 전체 (기본)
       where.OR = [
-        { userId: session.user.id },           // 내가 작성한 글
-        { visibility: "PUBLIC" },              // 공개 글
-        { id: { in: sharedPostIds } },         // 나에게 공유된 글
+        { userId: session.user.id },
+        { visibility: "PUBLIC" },
+        { id: { in: sharedPostIds } },
       ];
     }
 
@@ -3592,10 +3765,7 @@ export async function GET(request: NextRequest) {
       };
 
       if (where.OR) {
-        where.AND = [
-          { OR: where.OR },
-          searchCondition,
-        ];
+        where.AND = [{ OR: where.OR }, searchCondition];
         delete where.OR;
       } else {
         where.AND = [searchCondition];
@@ -3626,44 +3796,44 @@ export async function GET(request: NextRequest) {
       prisma.post.count({ where }),
     ]);
 
-    // 3. 각 게시글에 공유 정보 추가
-    const postsWithShareInfo = await Promise.all(
-      posts.map(async (post) => {
-        const isShared = sharedPostIds.includes(post.id);
-        let sharedBy = null;
+    // ✅ [성능-1] N+1 쿼리 → 단일 IN 쿼리로 최적화
+    // 기존: posts.map(async post => prisma.sharedResource.findFirst(...)) → 게시글 수만큼 쿼리 발생
+    // 개선: 조회된 게시글 ID 전체를 한 번에 조회 → Map으로 O(1) 탐색
+    const postIds = posts.map((p) => p.id);
 
-        if (isShared && post.userId !== session.user.id) {
-          // 공유받은 게시글인 경우 공유자 정보 조회
-          const shareInfo = await prisma.sharedResource.findFirst({
-            where: {
-              resourceType: "POST",
-              resourceId: post.id,
-              sharedWithId: session.user.id,
-            },
-            include: {
-              owner: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                },
-              },
-            },
-          });
+    const shareInfoList = await prisma.sharedResource.findMany({
+      where: {
+        resourceType: "POST",
+        resourceId: { in: postIds },
+        sharedWithId: session.user.id,
+      },
+      include: {
+        owner: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
 
-          if (shareInfo) {
-            sharedBy = shareInfo.owner.name;
-          }
-        }
+    // resourceId → shareInfo Map 구성
+    const shareMap = new Map(shareInfoList.map((s) => [s.resourceId, s]));
 
-        return {
-          ...post,
-          isOwner: post.userId === session.user.id,
-          isShared: isShared && post.userId !== session.user.id,
-          sharedBy,
-        };
-      })
-    );
+    // 3. 공유 정보 병합 (추가 쿼리 없음)
+    const postsWithShareInfo = posts.map((post) => {
+      const shareInfo = shareMap.get(post.id);
+      const isShared = !!shareInfo && post.userId !== session.user.id;
+      const sharedBy = isShared ? shareInfo!.owner.name : null;
+
+      return {
+        ...post,
+        isOwner: post.userId === session.user.id,
+        isShared,
+        sharedBy,
+      };
+    });
 
     return NextResponse.json({
       posts: postsWithShareInfo,
@@ -4272,6 +4442,38 @@ export async function DELETE(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+</file>
+
+<file path="src/app/api/users/me/storage/route.ts">
+// src/app/api/users/me/storage/route.ts
+// ✅ [구조-2] admin route에서 분리 — 내 저장 사용량 조회 전용 라우트
+// GET — 내 저장 사용량 조회
+
+import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { prisma } from "@/lib/db";
+
+export async function GET(request: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user)
+    return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { storageUsed: true, storageLimit: true },
+  });
+
+  const used  = user?.storageUsed  ?? BigInt(0);
+  const limit = user?.storageLimit ?? BigInt(5 * 1024 * 1024 * 1024); // 기본 5GB
+  const pct   = limit > 0 ? Math.round(Number((used * BigInt(100)) / limit)) : 0;
+
+  return NextResponse.json({
+    storageUsed:  used.toString(),
+    storageLimit: limit.toString(),
+    percentage:   pct,
+  });
 }
 </file>
 
@@ -5870,474 +6072,6 @@ const EUM_FIND_STYLE = `
   .eum-success-sub { font-size: 14px; color: rgba(255,255,255,0.5); line-height: 1.7; }
   .eum-expire { font-size: 12px; color: rgba(255,165,0,0.8); }
 `;
-</file>
-
-<file path="src/app/search/page.tsx">
-"use client";
-// src/app/search/page.tsx — EUM 브랜딩 고도화 + 모바일 버튼 overflow 수정
-
-import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { toast } from "@/components/Toast";
-import { useConfirm } from "@/components/ConfirmDialog";
-import {
-  Search, SlidersHorizontal, X, Save, BookMarked,
-  FileText, Image, Film, FileArchive, Trash2, ChevronLeft,
-  Tag as TagIcon, Calendar, LayoutGrid, AlignLeft,
-} from "lucide-react";
-
-interface SearchResult { files: any[]; posts: any[]; total: number; }
-interface SavedSearch { id: string; name: string; query: string; filters: string; createdAt: string; }
-interface Tag { id: string; name: string; }
-
-export default function SearchPage() {
-  const { data: session, status } = useSession();
-  const router = useRouter();
-  const { confirmDialog, openConfirm } = useConfirm();
-
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult>({ files: [], posts: [], total: 0 });
-  const [loading, setLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
-
-  const [showFilters, setShowFilters] = useState(false);
-  const [filterType, setFilterType] = useState<"ALL" | "FILE" | "POST">("ALL");
-  const [filterMimeType, setFilterMimeType] = useState("");
-  const [filterTagIds, setFilterTagIds] = useState<string[]>([]);
-  const [filterDateFrom, setFilterDateFrom] = useState("");
-  const [filterDateTo, setFilterDateTo] = useState("");
-
-  const [allTags, setAllTags] = useState<Tag[]>([]);
-  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
-  const [showSaveModal, setShowSaveModal] = useState(false);
-  const [saveSearchName, setSaveSearchName] = useState("");
-  const [showSavedList, setShowSavedList] = useState(false);
-
-  useEffect(() => {
-    if (status === "unauthenticated") router.push("/login");
-  }, [status, router]);
-
-  useEffect(() => {
-    if (session) { fetchTags(); fetchSavedSearches(); }
-  }, [session]);
-
-  const fetchTags = async () => {
-    try {
-      const res = await fetch("/api/tags");
-      if (res.ok) setAllTags((await res.json()).tags || []);
-    } catch {}
-  };
-
-  const fetchSavedSearches = async () => {
-    try {
-      const res = await fetch("/api/search/saved");
-      if (res.ok) setSavedSearches((await res.json()).savedSearches || []);
-    } catch {}
-  };
-
-  const activeFilterCount = [
-    filterType !== "ALL", filterMimeType !== "",
-    filterTagIds.length > 0, filterDateFrom !== "", filterDateTo !== "",
-  ].filter(Boolean).length;
-
-  const handleSearch = async (overrideQuery?: string) => {
-    const q = overrideQuery ?? query;
-    if (!q.trim() && filterTagIds.length === 0) {
-      toast.warning("검색어 또는 태그를 선택하세요");
-      return;
-    }
-    setLoading(true);
-    setHasSearched(true);
-    try {
-      const params = new URLSearchParams();
-      if (q.trim()) params.set("q", q.trim());
-      if (filterType !== "ALL") params.set("type", filterType);
-      if (filterMimeType) params.set("mimeType", filterMimeType);
-      if (filterTagIds.length > 0) params.set("tags", filterTagIds.join(","));
-      if (filterDateFrom) params.set("dateFrom", filterDateFrom);
-      if (filterDateTo) params.set("dateTo", filterDateTo);
-      const res = await fetch(`/api/search?${params}`);
-      if (res.ok) setResults(await res.json());
-      else toast.error("검색 중 오류가 발생했습니다");
-    } catch { toast.error("검색 중 오류가 발생했습니다"); }
-    finally { setLoading(false); }
-  };
-
-  const handleResetFilters = () => {
-    setFilterType("ALL"); setFilterMimeType(""); setFilterTagIds([]); setFilterDateFrom(""); setFilterDateTo("");
-  };
-
-  const handleToggleTag = (tagId: string) =>
-    setFilterTagIds((prev) => prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]);
-
-  const handleSaveSearch = async () => {
-    if (!saveSearchName.trim()) { toast.warning("검색 이름을 입력하세요"); return; }
-    try {
-      const filters = JSON.stringify({ type: filterType, mimeType: filterMimeType, tagIds: filterTagIds, dateFrom: filterDateFrom, dateTo: filterDateTo });
-      const res = await fetch("/api/search/saved", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: saveSearchName.trim(), query, filters }),
-      });
-      if (res.ok) { toast.success("검색이 저장되었습니다"); setShowSaveModal(false); setSaveSearchName(""); fetchSavedSearches(); }
-      else toast.error("저장에 실패했습니다");
-    } catch { toast.error("저장 중 오류가 발생했습니다"); }
-  };
-
-  const handleLoadSavedSearch = (saved: SavedSearch) => {
-    setQuery(saved.query || "");
-    try {
-      const f = JSON.parse(saved.filters || "{}");
-      setFilterType(f.type || "ALL"); setFilterMimeType(f.mimeType || "");
-      setFilterTagIds(f.tagIds || []); setFilterDateFrom(f.dateFrom || ""); setFilterDateTo(f.dateTo || "");
-    } catch {}
-    setShowSavedList(false);
-    handleSearch(saved.query || "");
-  };
-
-  const handleDeleteSavedSearch = (id: string) => {
-    openConfirm({
-      title: "저장된 검색 삭제", message: "저장된 검색을 삭제하시겠습니까?",
-      confirmLabel: "삭제", variant: "danger",
-      onConfirm: async () => {
-        try {
-          const res = await fetch(`/api/search/saved/${id}`, { method: "DELETE" });
-          if (res.ok) { fetchSavedSearches(); toast.success("삭제되었습니다"); }
-        } catch {}
-      },
-    });
-  };
-
-  if (status === "loading") {
-    return <div className="min-h-screen flex items-center justify-center bg-zinc-950"><div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" /></div>;
-  }
-  if (!session) return null;
-
-  return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      {confirmDialog}
-
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-0 right-1/3 w-80 h-80 bg-violet-600/5 rounded-full blur-3xl" />
-      </div>
-
-      {/* 헤더 */}
-      <header className="sticky top-0 z-20 bg-zinc-950/80 backdrop-blur-xl border-b border-white/5">
-        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
-          <Link href="/dashboard" className="p-1.5 rounded-lg hover:bg-white/5 transition-colors text-zinc-400 hover:text-zinc-200">
-            <ChevronLeft size={20} />
-          </Link>
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center">
-              <Search size={13} className="text-white" />
-            </div>
-            <h1 className="text-lg font-bold tracking-tight">검색</h1>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-3xl mx-auto px-4 py-6 relative">
-
-        {/* 검색 카드 */}
-        <div className="bg-white/3 border border-white/6 rounded-2xl p-4 mb-4">
-
-          {/* ✅ 모바일 overflow 수정: flex-1 min-w-0 on wrapper + shrink-0 on button */}
-          <div className="flex gap-2 mb-3">
-            <div className="flex-1 min-w-0 relative">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                placeholder="파일명, 게시글 제목으로 검색..."
-                className="w-full pl-9 pr-4 py-2.5 bg-zinc-900 border border-zinc-700 focus:border-violet-500 rounded-xl outline-none text-sm text-zinc-100 placeholder:text-zinc-600 transition-colors"
-              />
-            </div>
-            <button
-              onClick={() => handleSearch()}
-              disabled={loading}
-              className="shrink-0 px-4 py-2.5 bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-700 text-white rounded-xl text-sm font-medium transition-colors"
-            >
-              {loading
-                ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin block" />
-                : "검색"}
-            </button>
-          </div>
-
-          {/* 필터 / 저장 버튼 행 */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-all ${
-                showFilters || activeFilterCount > 0
-                  ? "bg-violet-500/10 border-violet-500/30 text-violet-400"
-                  : "bg-zinc-800/60 border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300"
-              }`}
-            >
-              <SlidersHorizontal size={12} />
-              필터
-              {activeFilterCount > 0 && (
-                <span className="bg-violet-600 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center font-bold">
-                  {activeFilterCount}
-                </span>
-              )}
-            </button>
-            {activeFilterCount > 0 && (
-              <button onClick={handleResetFilters} className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-red-400 border border-red-500/20 rounded-lg hover:bg-red-500/8 transition-colors">
-                <X size={11} /> 초기화
-              </button>
-            )}
-            <div className="ml-auto flex items-center gap-2">
-              {hasSearched && (
-                <button onClick={() => setShowSaveModal(true)} className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-emerald-400 border border-emerald-500/20 rounded-lg hover:bg-emerald-500/8 transition-colors">
-                  <Save size={11} /> 저장
-                </button>
-              )}
-              {savedSearches.length > 0 && (
-                <button onClick={() => setShowSavedList(!showSavedList)} className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-blue-400 border border-blue-500/20 rounded-lg hover:bg-blue-500/8 transition-colors">
-                  <BookMarked size={11} /> 저장됨 ({savedSearches.length})
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* 필터 패널 */}
-          {showFilters && (
-            <div className="mt-4 pt-4 border-t border-white/6 space-y-4">
-              <div>
-                <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">검색 대상</p>
-                <div className="flex gap-2">
-                  {(["ALL", "FILE", "POST"] as const).map((type) => (
-                    <button key={type} onClick={() => setFilterType(type)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border transition-all ${
-                        filterType === type ? "bg-violet-600 text-white border-violet-600" : "bg-zinc-800/60 text-zinc-400 border-zinc-700 hover:border-zinc-500"
-                      }`}>
-                      {type === "ALL" ? <LayoutGrid size={11} /> : type === "FILE" ? <FileText size={11} /> : <AlignLeft size={11} />}
-                      {type === "ALL" ? "전체" : type === "FILE" ? "파일" : "게시글"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {(filterType === "ALL" || filterType === "FILE") && (
-                <div>
-                  <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">파일 타입</p>
-                  <div className="flex flex-wrap gap-2">
-                    {[
-                      { label: "전체", value: "", icon: LayoutGrid },
-                      { label: "이미지", value: "image", icon: Image },
-                      { label: "동영상", value: "video", icon: Film },
-                      { label: "PDF", value: "pdf", icon: FileText },
-                      { label: "문서", value: "document", icon: AlignLeft },
-                      { label: "압축", value: "zip", icon: FileArchive },
-                    ].map(({ label, value, icon: Icon }) => (
-                      <button key={value} onClick={() => setFilterMimeType(value)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border transition-all ${
-                          filterMimeType === value ? "bg-emerald-600 text-white border-emerald-600" : "bg-zinc-800/60 text-zinc-400 border-zinc-700 hover:border-zinc-500"
-                        }`}>
-                        <Icon size={11} />{label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {allTags.length > 0 && (
-                <div>
-                  <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-2">
-                    태그 {filterTagIds.length > 0 && <span className="text-violet-400 normal-case font-normal">{filterTagIds.length}개 선택</span>}
-                  </p>
-                  <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">
-                    {allTags.map((tag) => (
-                      <button key={tag.id} onClick={() => handleToggleTag(tag.id)}
-                        className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-all ${
-                          filterTagIds.includes(tag.id) ? "bg-orange-500/20 text-orange-400 border-orange-500/30" : "bg-zinc-800/60 text-zinc-500 border-zinc-700 hover:border-zinc-500"
-                        }`}>
-                        <TagIcon size={10} />{tag.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Calendar size={11} /> 업로드 날짜
-                </p>
-                {/* ✅ 날짜 input도 min-w-0 처리 */}
-                <div className="flex items-center gap-2">
-                  <input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)}
-                    className="flex-1 min-w-0 px-3 py-1.5 bg-zinc-900 border border-zinc-700 focus:border-violet-500 rounded-lg text-xs text-zinc-300 outline-none transition-colors" />
-                  <span className="text-zinc-600 text-xs shrink-0">~</span>
-                  <input type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)}
-                    className="flex-1 min-w-0 px-3 py-1.5 bg-zinc-900 border border-zinc-700 focus:border-violet-500 rounded-lg text-xs text-zinc-300 outline-none transition-colors" />
-                  {(filterDateFrom || filterDateTo) && (
-                    <button onClick={() => { setFilterDateFrom(""); setFilterDateTo(""); }} className="shrink-0 text-zinc-500 hover:text-red-400 transition-colors">
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <button onClick={() => handleSearch()}
-                className="w-full py-2.5 bg-violet-600 hover:bg-violet-500 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2">
-                <Search size={14} /> 필터 적용해서 검색
-              </button>
-            </div>
-          )}
-
-          {/* 저장된 검색 목록 */}
-          {showSavedList && savedSearches.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-white/6">
-              <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-3">저장된 검색</p>
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {savedSearches.map((saved) => (
-                  <div key={saved.id} className="flex items-center gap-2 p-2.5 bg-zinc-900/60 rounded-xl border border-white/4">
-                    <button onClick={() => handleLoadSavedSearch(saved)} className="flex-1 text-left min-w-0">
-                      <p className="text-sm font-medium text-violet-400 hover:text-violet-300 transition-colors truncate">{saved.name}</p>
-                      {saved.query && <p className="text-xs text-zinc-600 truncate">"{saved.query}"</p>}
-                    </button>
-                    <button onClick={() => handleDeleteSavedSearch(saved.id)} className="shrink-0 p-1 text-zinc-600 hover:text-red-400 transition-colors">
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* 검색 결과 */}
-        {hasSearched && !loading && (
-          <div className="bg-white/3 border border-white/6 rounded-2xl p-5">
-            {results.total === 0 ? (
-              <div className="text-center py-10">
-                <Search size={32} className="text-zinc-700 mx-auto mb-3" />
-                <p className="text-zinc-400 mb-1">검색 결과가 없습니다</p>
-                <p className="text-zinc-600 text-sm">다른 검색어나 필터를 사용해보세요</p>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center justify-between mb-5">
-                  <h2 className="text-sm font-semibold text-zinc-300">
-                    검색 결과 <span className="text-violet-400 ml-1">{results.total}개</span>
-                  </h2>
-                  <div className="flex gap-3 text-xs text-zinc-600">
-                    {results.files.length > 0 && <span className="flex items-center gap-1"><FileText size={11} />{results.files.length}</span>}
-                    {results.posts.length > 0 && <span className="flex items-center gap-1"><AlignLeft size={11} />{results.posts.length}</span>}
-                  </div>
-                </div>
-
-                {results.files.length > 0 && (
-                  <div className="mb-5">
-                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                      <FileText size={11} /> 파일 ({results.files.length})
-                    </p>
-                    <div className="space-y-2">
-                      {results.files.map((file: any) => (
-                        <div key={file.id} onClick={() => router.push("/dashboard")}
-                          className="flex items-center gap-3 p-3 bg-zinc-900/60 hover:bg-zinc-900 border border-white/4 hover:border-white/8 rounded-xl cursor-pointer transition-all">
-                          <div className="w-10 h-10 rounded-lg bg-zinc-800 flex-shrink-0 overflow-hidden">
-                            {file.thumbnailUrl ? (
-                              <img src={file.thumbnailUrl} alt="" className="w-full h-full object-cover" />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center">
-                                {file.mimeType?.startsWith("image/") ? <Image size={18} className="text-zinc-500" /> :
-                                 file.mimeType?.startsWith("video/") ? <Film size={18} className="text-zinc-500" /> :
-                                 <FileText size={18} className="text-zinc-500" />}
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium text-sm text-zinc-200 truncate">{file.originalName}</p>
-                            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                              <span className="text-xs text-zinc-600">{(parseInt(file.size) / 1024 / 1024).toFixed(2)} MB</span>
-                              <span className="text-zinc-700">·</span>
-                              <span className="text-xs text-zinc-600">{new Date(file.createdAt).toLocaleDateString("ko-KR")}</span>
-                              {file.fileTags?.map((ft: any) => (
-                                <span key={ft.tag.id} className="px-1.5 py-0.5 text-[10px] bg-violet-500/10 text-violet-400 rounded-full">{ft.tag.name}</span>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {results.posts.length > 0 && (
-                  <div>
-                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                      <AlignLeft size={11} /> 게시글 ({results.posts.length})
-                    </p>
-                    <div className="space-y-2">
-                      {results.posts.map((post: any) => (
-                        <Link key={post.id} href={`/posts/${post.id}`}
-                          className="block p-3 bg-zinc-900/60 hover:bg-zinc-900 border border-white/4 hover:border-white/8 rounded-xl transition-all">
-                          <div className="flex items-start gap-3">
-                            <div className="flex-1 min-w-0">
-                              <p className="font-medium text-sm text-zinc-200 truncate">{post.title}</p>
-                              <p className="text-xs text-zinc-600 mt-0.5 line-clamp-1">{post.content}</p>
-                            </div>
-                            <span className={`shrink-0 px-2 py-0.5 text-[10px] rounded-full font-medium ${
-                              post.visibility === "PUBLIC" ? "bg-emerald-500/10 text-emerald-400" :
-                              post.visibility === "SHARED" ? "bg-blue-500/10 text-blue-400" :
-                              "bg-zinc-700/60 text-zinc-500"
-                            }`}>
-                              {post.visibility === "PUBLIC" ? "공개" : post.visibility === "SHARED" ? "공유" : "비공개"}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-2 flex-wrap">
-                            <span className="text-xs text-zinc-600">{new Date(post.createdAt).toLocaleDateString("ko-KR")}</span>
-                            {post.postTags?.map((pt: any) => (
-                              <span key={pt.tag.id} className="px-1.5 py-0.5 text-[10px] bg-orange-500/10 text-orange-400 rounded-full">{pt.tag.name}</span>
-                            ))}
-                          </div>
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-      </main>
-
-      {/* 검색 저장 모달 */}
-      {showSaveModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setShowSaveModal(false)}>
-          <div className="bg-zinc-900 border border-white/8 rounded-2xl shadow-2xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-base font-semibold text-zinc-100 mb-4 flex items-center gap-2">
-              <Save size={16} className="text-violet-400" /> 검색 저장
-            </h3>
-            <input
-              type="text" value={saveSearchName} onChange={(e) => setSaveSearchName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSaveSearch()}
-              placeholder="저장할 검색 이름"
-              className="w-full px-4 py-2.5 bg-zinc-800 border border-zinc-700 focus:border-violet-500 rounded-xl text-sm text-zinc-100 placeholder:text-zinc-600 outline-none mb-4 transition-colors"
-              autoFocus
-            />
-            <div className="text-xs text-zinc-600 mb-5 space-y-1 bg-zinc-800/50 rounded-xl p-3">
-              {query && <p>검색어: <span className="text-zinc-400">"{query}"</span></p>}
-              {filterType !== "ALL" && <p>대상: <span className="text-zinc-400">{filterType}</span></p>}
-              {filterMimeType && <p>타입: <span className="text-zinc-400">{filterMimeType}</span></p>}
-              {filterTagIds.length > 0 && <p>태그: <span className="text-zinc-400">{filterTagIds.length}개</span></p>}
-              {(filterDateFrom || filterDateTo) && <p>날짜: <span className="text-zinc-400">{filterDateFrom} ~ {filterDateTo}</span></p>}
-            </div>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setShowSaveModal(false)} className="px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800 rounded-xl transition-colors">취소</button>
-              <button onClick={handleSaveSearch} className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-xl transition-colors font-medium">저장</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 </file>
 
 <file path="src/components/Breadcrumb.tsx">
@@ -9555,48 +9289,6 @@ export async function DELETE(
 }
 </file>
 
-<file path="src/app/api/admin/users/route.ts">
-// src/app/api/admin/users/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { prisma } from "@/lib/db";
-
-async function requireAdmin() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return null;
-  const user = await prisma.user.findUnique({ where: { id: session.user.id } });
-  if (!user || user.role !== "ADMIN") return null;
-  return user;
-}
-
-// GET /api/admin/users — 전체 사용자 목록
-export async function GET(request: NextRequest) {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "관리자 권한이 필요합니다" }, { status: 403 });
-  }
-
-  const users = await prisma.user.findMany({
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-      emailVerified: true,
-      isOnline: true,
-      createdAt: true,
-      _count: {
-        select: { files: true, posts: true, comments: true },
-      },
-    },
-  });
-
-  return NextResponse.json(users);
-}
-</file>
-
 <file path="src/app/api/auth/2fa/disable/route.ts">
 // src/app/api/auth/2fa/disable/route.ts
 // DELETE → 2FA 비활성화 (현재 OTP 코드 또는 백업 코드 확인 후)
@@ -10545,17 +10237,18 @@ export async function POST(
 </file>
 
 <file path="src/app/api/files/[id]/route.ts">
-// src/app/api/files/[id]/route.ts (DELETE 메서드 교체)
-// 기존 DELETE를 soft delete로 변경
-
+// src/app/api/files/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/db";
 import { unlink } from "fs/promises";
 import { existsSync } from "fs";
+import { join, basename } from "path";
 
-// PATCH — 파일 메타 수정 (기존 유지)
+const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
+
+// GET — 파일 메타 조회
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -10572,7 +10265,7 @@ export async function GET(
   return NextResponse.json(file);
 }
 
-// DELETE — 휴지통으로 이동 (soft delete)
+// DELETE — 휴지통으로 이동 (soft delete) / 영구 삭제
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -10588,13 +10281,27 @@ export async function DELETE(
 
     // 이미 삭제된 파일이면 영구 삭제
     if (file.deletedAt) {
-      if (existsSync(file.filepath)) await unlink(file.filepath);
-      if (file.thumbnailUrl && existsSync(file.thumbnailUrl)) await unlink(file.thumbnailUrl);
+      // ✅ [품질-3] 물리 파일 삭제
+      if (existsSync(file.filepath)) {
+        await unlink(file.filepath);
+      }
+
+      // ✅ [품질-3] 썸네일 삭제 버그 수정
+      // 기존: file.thumbnailUrl("/api/files/thumbnail/thumb_xxx.jpg")을 파일 경로로 직접 사용 → 삭제 안 됨
+      // 개선: URL에서 파일명만 추출 후 실제 스토리지 경로로 변환
+      if (file.thumbnailUrl) {
+        const thumbFilename = basename(file.thumbnailUrl); // "thumb_xxx.jpg"
+        const thumbPath = join(STORAGE_PATH, "thumbnails", thumbFilename);
+        if (existsSync(thumbPath)) {
+          await unlink(thumbPath);
+        }
+      }
+
       await prisma.file.delete({ where: { id: params.id } });
       return NextResponse.json({ message: "파일이 영구 삭제되었습니다", permanent: true });
     }
 
-    // 처음 삭제: 휴지통으로 이동
+    // 처음 삭제: 휴지통으로 이동 (물리 파일은 유지)
     await prisma.file.update({
       where: { id: params.id },
       data: { deletedAt: new Date() },
@@ -13190,364 +12897,6 @@ export default function BannedPage() {
 }
 </file>
 
-<file path="src/app/chat/page.tsx">
-"use client";
-// src/app/chat/page.tsx — EUM 브랜딩 고도화 + 모바일 검색버튼 overflow 수정
-
-import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
-import { useSocket } from "@/hooks/useSocket";
-import { toast } from "@/components/Toast";
-import {
-  MessageSquare, Plus, ChevronLeft, Search,
-  Phone, Video, Users, Wifi, WifiOff,
-} from "lucide-react";
-
-interface ChatRoom {
-  id: string;
-  name: string | null;
-  type: "DIRECT" | "GROUP";
-  members: any[];
-  messages: any[];
-  unreadCount: number;
-  updatedAt: string;
-}
-
-export default function ChatPage() {
-  const { data: session, status } = useSession();
-  const router = useRouter();
-  const { socket, isConnected } = useSocket();
-
-  const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showNewChatModal, setShowNewChatModal] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isCreating, setIsCreating] = useState(false);
-  const [creatingUserId, setCreatingUserId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (status === "unauthenticated") router.push("/login");
-  }, [status, router]);
-
-  const fetchChatRooms = useCallback(async () => {
-    try {
-      const res = await fetch("/api/chat/rooms");
-      if (res.ok) setChatRooms((await res.json()).chatRooms || []);
-    } catch { console.error("채팅방 목록 로드 실패"); }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => {
-    if (session) fetchChatRooms();
-  }, [session, fetchChatRooms]);
-
-  useEffect(() => {
-    if (!socket) return;
-    const handleNewMessage = (data: any) => {
-      setChatRooms((prev) => {
-        const idx = prev.findIndex((r) => r.id === data.chatRoomId);
-        if (idx === -1) return prev;
-        const updated = [...prev];
-        const room = { ...updated[idx] };
-        room.messages = [data];
-        room.updatedAt = data.createdAt || new Date().toISOString();
-        if (data.senderId !== session?.user?.id) room.unreadCount = (room.unreadCount || 0) + 1;
-        updated.splice(idx, 1);
-        return [room, ...updated];
-      });
-    };
-    socket.on("message:receive", handleNewMessage);
-    socket.on("message:new", handleNewMessage);
-    return () => { socket.off("message:receive", handleNewMessage); socket.off("message:new", handleNewMessage); };
-  }, [socket, session?.user?.id]);
-
-  const searchUsers = async () => {
-    if (!searchQuery.trim()) return;
-    setIsSearching(true);
-    try {
-      const res = await fetch(`/api/users/search?q=${encodeURIComponent(searchQuery)}`);
-      if (res.ok) {
-        const data = await res.json();
-        setSearchResults(data.users || []);
-        if ((data.users || []).length === 0) toast.info("검색 결과가 없습니다");
-      }
-    } catch { toast.error("사용자 검색에 실패했습니다"); }
-    finally { setIsSearching(false); }
-  };
-
-  const createChatRoom = async (otherUserId: string) => {
-    setIsCreating(true);
-    setCreatingUserId(otherUserId);
-    try {
-      const res = await fetch("/api/chat/rooms", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ participantId: otherUserId, type: "DIRECT" }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        router.push(`/chat/${data.chatRoom.id}`);
-      } else {
-        toast.error("채팅방 생성에 실패했습니다");
-      }
-    } catch { toast.error("채팅방 생성 중 오류가 발생했습니다"); }
-    finally { setIsCreating(false); setCreatingUserId(null); }
-  };
-
-  const closeModal = () => { setShowNewChatModal(false); setSearchResults([]); setSearchQuery(""); };
-
-  const getChatRoomName = (chatRoom: ChatRoom) => {
-    if (chatRoom.type === "GROUP") return chatRoom.name || "그룹 채팅";
-    const other = chatRoom.members.find((m) => m.user.id !== session?.user?.id);
-    return other?.user.name || "알 수 없음";
-  };
-
-  const isOnline = (chatRoom: ChatRoom) => {
-    if (chatRoom.type !== "DIRECT") return false;
-    const other = chatRoom.members.find((m) => m.user.id !== session?.user?.id);
-    return other?.user?.isOnline ?? false;
-  };
-
-  const getLastMessage = (chatRoom: ChatRoom) => {
-    if (!chatRoom.messages?.length) return "메시지가 없습니다";
-    const last = chatRoom.messages[0];
-    if (last.type === "FILE") return "📎 파일";
-    if (last.type === "CALL_LOG") return "📞 통화";
-    if (last.type === "SYSTEM") return last.content || "시스템 메시지";
-    return last.content || "메시지가 없습니다";
-  };
-
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) return "";
-    const now = new Date();
-    if (date.toDateString() === now.toDateString())
-      return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    if (date.toDateString() === yesterday.toDateString()) return "어제";
-    return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
-  };
-
-  if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-zinc-950">
-        <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-  if (!session) return null;
-
-  return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      {/* 배경 장식 */}
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-blue-600/5 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 left-0 w-64 h-64 bg-violet-600/4 rounded-full blur-3xl" />
-      </div>
-
-      {/* 헤더 */}
-      <header className="sticky top-0 z-20 bg-zinc-950/80 backdrop-blur-xl border-b border-white/5">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <Link href="/dashboard" className="p-1.5 rounded-lg hover:bg-white/5 transition-colors text-zinc-400 hover:text-zinc-200">
-              <ChevronLeft size={20} />
-            </Link>
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center">
-                <MessageSquare size={14} className="text-white" />
-              </div>
-              <h1 className="text-lg font-bold tracking-tight">채팅</h1>
-              {/* 연결 상태 */}
-              <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
-                isConnected
-                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                  : "bg-zinc-800 text-zinc-500 border-zinc-700"
-              }`}>
-                {isConnected ? <Wifi size={9} /> : <WifiOff size={9} />}
-                {isConnected ? "연결됨" : "연결 중"}
-              </div>
-            </div>
-          </div>
-          <button
-            onClick={() => setShowNewChatModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors"
-          >
-            <Plus size={14} />
-            새 채팅
-          </button>
-        </div>
-      </header>
-
-      {/* 채팅방 목록 */}
-      <main className="max-w-2xl mx-auto px-4 py-4 relative">
-        {loading ? (
-          <div className="space-y-2">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="bg-white/3 rounded-2xl p-4 flex gap-3 animate-pulse">
-                <div className="w-12 h-12 rounded-full bg-white/5 shrink-0" />
-                <div className="flex-1 space-y-2 py-1">
-                  <div className="h-4 bg-white/5 rounded w-1/3" />
-                  <div className="h-3 bg-white/3 rounded w-2/3" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : chatRooms.length === 0 ? (
-          <div className="text-center py-20">
-            <div className="w-16 h-16 rounded-2xl bg-white/4 flex items-center justify-center mx-auto mb-4">
-              <MessageSquare size={28} className="text-zinc-600" />
-            </div>
-            <p className="text-zinc-400 mb-1">아직 대화가 없어요</p>
-            <p className="text-zinc-600 text-sm mb-6">새 채팅을 시작해보세요</p>
-            <button
-              onClick={() => setShowNewChatModal(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors"
-            >
-              <Plus size={14} />첫 채팅 시작하기
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-1">
-            {chatRooms.map((chatRoom) => {
-              const online = isOnline(chatRoom);
-              const name = getChatRoomName(chatRoom);
-              const initial = name[0]?.toUpperCase() || "?";
-              return (
-                <Link
-                  key={chatRoom.id}
-                  href={`/chat/${chatRoom.id}`}
-                  className="flex items-center gap-3 bg-white/3 hover:bg-white/5 border border-white/5 hover:border-white/10 rounded-2xl p-4 transition-all duration-200 group"
-                >
-                  {/* 아바타 */}
-                  <div className="relative shrink-0">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-white/8 flex items-center justify-center text-blue-300 font-bold text-lg">
-                      {initial}
-                    </div>
-                    {chatRoom.type === "GROUP" && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center">
-                        <Users size={10} className="text-zinc-400" />
-                      </div>
-                    )}
-                    {online && chatRoom.type === "DIRECT" && (
-                      <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-zinc-950" />
-                    )}
-                  </div>
-
-                  {/* 내용 */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="font-semibold text-zinc-100 text-sm group-hover:text-white transition-colors">{name}</span>
-                      <span className="text-xs text-zinc-600 shrink-0 ml-2">{formatDate(chatRoom.updatedAt)}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm text-zinc-500 truncate">{getLastMessage(chatRoom)}</p>
-                      {chatRoom.unreadCount > 0 && (
-                        <span className="ml-2 min-w-[20px] h-5 px-1.5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center shrink-0 font-medium">
-                          {chatRoom.unreadCount > 99 ? "99+" : chatRoom.unreadCount}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </main>
-
-      {/* 새 채팅 모달 */}
-      {showNewChatModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-          onClick={closeModal}
-        >
-          <div
-            className="bg-zinc-900 border border-white/8 rounded-2xl shadow-2xl w-full max-w-md p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-bold mb-1 text-zinc-100">새 채팅 시작</h3>
-            <p className="text-xs text-zinc-500 mb-4">이름 또는 이메일로 사용자를 검색하세요</p>
-
-            {/* ✅ 모바일 overflow 수정: flex-1 min-w-0 on input wrapper + shrink-0 on button */}
-            <div className="flex gap-2 mb-4">
-              <div className="flex-1 min-w-0 relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && searchUsers()}
-                  placeholder="이름 또는 이메일로 검색"
-                  className="w-full pl-9 pr-4 py-2.5 bg-zinc-800 border border-zinc-700 focus:border-blue-500 rounded-xl outline-none text-sm text-zinc-100 placeholder:text-zinc-600 transition-colors"
-                  autoFocus
-                />
-              </div>
-              <button
-                onClick={searchUsers}
-                disabled={isSearching || !searchQuery.trim()}
-                className="shrink-0 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isSearching
-                  ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin block" />
-                  : "검색"}
-              </button>
-            </div>
-
-            {/* 검색 결과 */}
-            {searchResults.length > 0 && (
-              <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
-                {searchResults.map((user) => (
-                  <button
-                    key={user.id}
-                    onClick={() => createChatRoom(user.id)}
-                    disabled={isCreating}
-                    className="w-full p-3 text-left bg-zinc-800/60 hover:bg-zinc-800 border border-zinc-700 hover:border-blue-500/40 rounded-xl transition-all disabled:opacity-50"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="relative shrink-0">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-white/8 flex items-center justify-center text-blue-300 font-bold">
-                          {user.name?.[0]?.toUpperCase() || "?"}
-                        </div>
-                        {user.isOnline && (
-                          <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-zinc-900" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-zinc-100 text-sm">{user.name}</p>
-                        <p className="text-xs text-zinc-500 truncate">{user.email}</p>
-                      </div>
-                      <div className="shrink-0 flex items-center gap-1.5">
-                        {creatingUserId === user.id && isCreating
-                          ? <span className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                          : (
-                            <div className="flex gap-1">
-                              <span className="p-1.5 rounded-lg bg-zinc-700/50 text-zinc-400"><Phone size={12} /></span>
-                              <span className="p-1.5 rounded-lg bg-zinc-700/50 text-zinc-400"><Video size={12} /></span>
-                            </div>
-                          )}
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="flex justify-end">
-              <button onClick={closeModal} className="px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800 rounded-xl transition-colors">닫기</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-</file>
-
 <file path="src/app/global-error.tsx">
 // ══════════════════════════════════════════════════════════
 // src/app/global-error.tsx — 최상위 에러 핸들러 (레이아웃 오류)
@@ -14471,221 +13820,469 @@ export default function PostDetailPage() {
 }
 </file>
 
-<file path="src/app/posts/page.tsx">
+<file path="src/app/search/page.tsx">
 "use client";
-// src/app/posts/page.tsx — EUM 브랜딩 고도화
+// src/app/search/page.tsx — EUM 브랜딩 고도화 + 모바일 버튼 overflow 수정
 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import SearchBar from "@/components/SearchBar";
+import { toast } from "@/components/Toast";
+import { useConfirm } from "@/components/ConfirmDialog";
 import {
-  PenSquare, Globe, Lock, Share2, MessageSquare,
-  ChevronLeft, Sparkles, BookOpen, Users,
+  Search, SlidersHorizontal, X, Save, BookMarked,
+  FileText, Image, Film, FileArchive, Trash2, ChevronLeft,
+  Tag as TagIcon, Calendar, LayoutGrid, AlignLeft,
 } from "lucide-react";
 
-interface Post {
-  id: string;
-  title: string;
-  content: string;
-  visibility: string;
-  createdAt: string;
-  user: { id: string; name: string };
-  _count: { comments: number };
-  isOwner: boolean;
-  isShared: boolean;
-  sharedBy?: string;
-}
+interface SearchResult { files: any[]; posts: any[]; total: number; }
+interface SavedSearch { id: string; name: string; query: string; filters: string; createdAt: string; }
+interface Tag { id: string; name: string; }
 
-const FILTERS = [
-  { key: "all",    label: "전체",     icon: BookOpen,  active: "bg-violet-600 text-white border-violet-600",   inactive: "text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200" },
-  { key: "my",     label: "내 글",    icon: PenSquare, active: "bg-violet-600 text-white border-violet-600",   inactive: "text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200" },
-  { key: "public", label: "공개",     icon: Globe,     active: "bg-emerald-600 text-white border-emerald-600", inactive: "text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200" },
-  { key: "shared", label: "공유받음", icon: Share2,    active: "bg-blue-600 text-white border-blue-600",       inactive: "text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200" },
-] as const;
-
-const VISIBILITY_META = {
-  PUBLIC:  { label: "공개",   icon: Globe,   cls: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" },
-  SHARED:  { label: "공유",   icon: Share2,  cls: "bg-blue-500/10 text-blue-400 border border-blue-500/20" },
-  PRIVATE: { label: "비공개", icon: Lock,    cls: "bg-zinc-700/60 text-zinc-400 border border-zinc-600/30" },
-};
-
-export default function PostsPage() {
+export default function SearchPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"all" | "my" | "public" | "shared">("all");
-  const [searchQuery, setSearchQuery] = useState("");
+  const { confirmDialog, openConfirm } = useConfirm();
+
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchResult>({ files: [], posts: [], total: 0 });
+  const [loading, setLoading] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterType, setFilterType] = useState<"ALL" | "FILE" | "POST">("ALL");
+  const [filterMimeType, setFilterMimeType] = useState("");
+  const [filterTagIds, setFilterTagIds] = useState<string[]>([]);
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
+
+  const [allTags, setAllTags] = useState<Tag[]>([]);
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveSearchName, setSaveSearchName] = useState("");
+  const [showSavedList, setShowSavedList] = useState(false);
 
   useEffect(() => {
     if (status === "unauthenticated") router.push("/login");
   }, [status, router]);
 
   useEffect(() => {
-    if (session) fetchPosts();
-  }, [session, filter, searchQuery]);
+    if (session) { fetchTags(); fetchSavedSearches(); }
+  }, [session]);
 
-  const fetchPosts = async () => {
+  const fetchTags = async () => {
+    try {
+      const res = await fetch("/api/tags");
+      if (res.ok) setAllTags((await res.json()).tags || []);
+    } catch {}
+  };
+
+  const fetchSavedSearches = async () => {
+    try {
+      const res = await fetch("/api/search/saved");
+      if (res.ok) setSavedSearches((await res.json()).savedSearches || []);
+    } catch {}
+  };
+
+  const activeFilterCount = [
+    filterType !== "ALL", filterMimeType !== "",
+    filterTagIds.length > 0, filterDateFrom !== "", filterDateTo !== "",
+  ].filter(Boolean).length;
+
+  const handleSearch = async (overrideQuery?: string) => {
+    const q = overrideQuery ?? query;
+    if (!q.trim() && filterTagIds.length === 0) {
+      toast.warning("검색어 또는 태그를 선택하세요");
+      return;
+    }
     setLoading(true);
+    setHasSearched(true);
     try {
       const params = new URLSearchParams();
-      if (filter !== "all") params.set("visibility", filter);
-      if (searchQuery) params.set("search", searchQuery);
-      const res = await fetch(`/api/posts?${params}`);
-      if (res.ok) setPosts((await res.json()).posts);
-    } catch (err) {
-      console.error("Failed to fetch posts:", err);
-    } finally {
-      setLoading(false);
-    }
+      if (q.trim()) params.set("q", q.trim());
+      if (filterType !== "ALL") params.set("type", filterType);
+      if (filterMimeType) params.set("mimeType", filterMimeType);
+      if (filterTagIds.length > 0) params.set("tags", filterTagIds.join(","));
+      if (filterDateFrom) params.set("dateFrom", filterDateFrom);
+      if (filterDateTo) params.set("dateTo", filterDateTo);
+      const res = await fetch(`/api/search?${params}`);
+      if (res.ok) setResults(await res.json());
+      else toast.error("검색 중 오류가 발생했습니다");
+    } catch { toast.error("검색 중 오류가 발생했습니다"); }
+    finally { setLoading(false); }
+  };
+
+  const handleResetFilters = () => {
+    setFilterType("ALL"); setFilterMimeType(""); setFilterTagIds([]); setFilterDateFrom(""); setFilterDateTo("");
+  };
+
+  const handleToggleTag = (tagId: string) =>
+    setFilterTagIds((prev) => prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]);
+
+  const handleSaveSearch = async () => {
+    if (!saveSearchName.trim()) { toast.warning("검색 이름을 입력하세요"); return; }
+    try {
+      const filters = JSON.stringify({ type: filterType, mimeType: filterMimeType, tagIds: filterTagIds, dateFrom: filterDateFrom, dateTo: filterDateTo });
+      const res = await fetch("/api/search/saved", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: saveSearchName.trim(), query, filters }),
+      });
+      if (res.ok) { toast.success("검색이 저장되었습니다"); setShowSaveModal(false); setSaveSearchName(""); fetchSavedSearches(); }
+      else toast.error("저장에 실패했습니다");
+    } catch { toast.error("저장 중 오류가 발생했습니다"); }
+  };
+
+  const handleLoadSavedSearch = (saved: SavedSearch) => {
+    setQuery(saved.query || "");
+    try {
+      const f = JSON.parse(saved.filters || "{}");
+      setFilterType(f.type || "ALL"); setFilterMimeType(f.mimeType || "");
+      setFilterTagIds(f.tagIds || []); setFilterDateFrom(f.dateFrom || ""); setFilterDateTo(f.dateTo || "");
+    } catch {}
+    setShowSavedList(false);
+    handleSearch(saved.query || "");
+  };
+
+  const handleDeleteSavedSearch = (id: string) => {
+    openConfirm({
+      title: "저장된 검색 삭제", message: "저장된 검색을 삭제하시겠습니까?",
+      confirmLabel: "삭제", variant: "danger",
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`/api/search/saved/${id}`, { method: "DELETE" });
+          if (res.ok) { fetchSavedSearches(); toast.success("삭제되었습니다"); }
+        } catch {}
+      },
+    });
   };
 
   if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-zinc-950">
-        <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
+    return <div className="min-h-screen flex items-center justify-center bg-zinc-950"><div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" /></div>;
   }
   if (!session) return null;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      {/* 배경 장식 */}
+      {confirmDialog}
+
       <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-violet-600/6 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/3 right-1/4 w-64 h-64 bg-blue-600/5 rounded-full blur-3xl" />
+        <div className="absolute top-0 right-1/3 w-80 h-80 bg-violet-600/5 rounded-full blur-3xl" />
       </div>
 
       {/* 헤더 */}
       <header className="sticky top-0 z-20 bg-zinc-950/80 backdrop-blur-xl border-b border-white/5">
-        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <Link href="/dashboard" className="p-1.5 rounded-lg hover:bg-white/5 transition-colors text-zinc-400 hover:text-zinc-200">
-              <ChevronLeft size={20} />
-            </Link>
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center">
-                <BookOpen size={14} className="text-white" />
-              </div>
-              <h1 className="text-lg font-bold tracking-tight">게시판</h1>
-            </div>
-          </div>
-          <Link
-            href="/posts/new"
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white rounded-lg text-sm font-medium transition-colors"
-          >
-            <PenSquare size={14} />
-            글쓰기
+        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
+          <Link href="/dashboard" className="p-1.5 rounded-lg hover:bg-white/5 transition-colors text-zinc-400 hover:text-zinc-200">
+            <ChevronLeft size={20} />
           </Link>
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center">
+              <Search size={13} className="text-white" />
+            </div>
+            <h1 className="text-lg font-bold tracking-tight">검색</h1>
+          </div>
         </div>
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-6 relative">
 
-        {/* 필터 탭 */}
-        <div className="flex gap-2 mb-5 overflow-x-auto pb-1 scrollbar-hide">
-          {FILTERS.map(({ key, label, icon: Icon, active, inactive }) => (
+        {/* 검색 카드 */}
+        <div className="bg-white/3 border border-white/6 rounded-2xl p-4 mb-4">
+
+          {/* ✅ 모바일 overflow 수정: flex-1 min-w-0 on wrapper + shrink-0 on button */}
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1 min-w-0 relative">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                placeholder="파일명, 게시글 제목으로 검색..."
+                className="w-full pl-9 pr-4 py-2.5 bg-zinc-900 border border-zinc-700 focus:border-violet-500 rounded-xl outline-none text-sm text-zinc-100 placeholder:text-zinc-600 transition-colors"
+              />
+            </div>
             <button
-              key={key}
-              onClick={() => setFilter(key as any)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium whitespace-nowrap transition-all shrink-0 ${
-                filter === key ? active : inactive
+              onClick={() => handleSearch()}
+              disabled={loading}
+              className="shrink-0 px-4 py-2.5 bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-700 text-white rounded-xl text-sm font-medium transition-colors"
+            >
+              {loading
+                ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin block" />
+                : "검색"}
+            </button>
+          </div>
+
+          {/* 필터 / 저장 버튼 행 */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-all ${
+                showFilters || activeFilterCount > 0
+                  ? "bg-violet-500/10 border-violet-500/30 text-violet-400"
+                  : "bg-zinc-800/60 border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300"
               }`}
             >
-              <Icon size={13} />
-              {label}
+              <SlidersHorizontal size={12} />
+              필터
+              {activeFilterCount > 0 && (
+                <span className="bg-violet-600 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center font-bold">
+                  {activeFilterCount}
+                </span>
+              )}
             </button>
-          ))}
-        </div>
-
-        {/* 검색 */}
-        <div className="mb-5">
-          <SearchBar onSearch={setSearchQuery} placeholder="게시글 검색..." />
-        </div>
-
-        {/* 공개 설정 안내 배너 */}
-        <div className="mb-6 p-4 rounded-xl bg-white/3 border border-white/6 text-sm text-zinc-400 flex gap-3">
-          <Sparkles size={16} className="text-violet-400 shrink-0 mt-0.5" />
-          <div>
-            <span className="text-zinc-300 font-medium block mb-1">공개 설정 안내</span>
-            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
-              <span><Lock size={11} className="inline mr-1 text-zinc-500" />비공개: 나만</span>
-              <span><Share2 size={11} className="inline mr-1 text-blue-400" />공유: 특정 사용자</span>
-              <span><Globe size={11} className="inline mr-1 text-emerald-400" />공개: 전체</span>
+            {activeFilterCount > 0 && (
+              <button onClick={handleResetFilters} className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-red-400 border border-red-500/20 rounded-lg hover:bg-red-500/8 transition-colors">
+                <X size={11} /> 초기화
+              </button>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              {hasSearched && (
+                <button onClick={() => setShowSaveModal(true)} className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-emerald-400 border border-emerald-500/20 rounded-lg hover:bg-emerald-500/8 transition-colors">
+                  <Save size={11} /> 저장
+                </button>
+              )}
+              {savedSearches.length > 0 && (
+                <button onClick={() => setShowSavedList(!showSavedList)} className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-blue-400 border border-blue-500/20 rounded-lg hover:bg-blue-500/8 transition-colors">
+                  <BookMarked size={11} /> 저장됨 ({savedSearches.length})
+                </button>
+              )}
             </div>
           </div>
-        </div>
 
-        {/* 게시글 목록 */}
-        {loading ? (
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="bg-white/3 rounded-2xl p-5 animate-pulse">
-                <div className="h-4 bg-white/5 rounded w-2/3 mb-3" />
-                <div className="h-3 bg-white/4 rounded w-full mb-2" />
-                <div className="h-3 bg-white/4 rounded w-1/2" />
+          {/* 필터 패널 */}
+          {showFilters && (
+            <div className="mt-4 pt-4 border-t border-white/6 space-y-4">
+              <div>
+                <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">검색 대상</p>
+                <div className="flex gap-2">
+                  {(["ALL", "FILE", "POST"] as const).map((type) => (
+                    <button key={type} onClick={() => setFilterType(type)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border transition-all ${
+                        filterType === type ? "bg-violet-600 text-white border-violet-600" : "bg-zinc-800/60 text-zinc-400 border-zinc-700 hover:border-zinc-500"
+                      }`}>
+                      {type === "ALL" ? <LayoutGrid size={11} /> : type === "FILE" ? <FileText size={11} /> : <AlignLeft size={11} />}
+                      {type === "ALL" ? "전체" : type === "FILE" ? "파일" : "게시글"}
+                    </button>
+                  ))}
+                </div>
               </div>
-            ))}
-          </div>
-        ) : posts.length === 0 ? (
-          <div className="py-20 text-center">
-            <div className="w-16 h-16 rounded-2xl bg-white/4 flex items-center justify-center mx-auto mb-4">
-              <BookOpen size={28} className="text-zinc-600" />
-            </div>
-            <p className="text-zinc-400 mb-1">게시글이 없습니다</p>
-            <p className="text-zinc-600 text-sm mb-6">
-              {filter === "shared" ? "공유받은 글이 없습니다" : "첫 게시글을 작성해보세요"}
-            </p>
-            <Link href="/posts/new" className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white rounded-lg text-sm font-medium transition-colors">
-              <PenSquare size={14} />글 작성하기
-            </Link>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {posts.map((post) => {
-              const vis = VISIBILITY_META[post.visibility as keyof typeof VISIBILITY_META] ?? VISIBILITY_META.PRIVATE;
-              const VisIcon = vis.icon;
-              return (
-                <Link
-                  key={post.id}
-                  href={`/posts/${post.id}`}
-                  className={`group block bg-white/3 hover:bg-white/5 border rounded-2xl p-5 transition-all duration-200 ${
-                    post.isShared ? "border-blue-500/20 hover:border-blue-500/30" : "border-white/5 hover:border-white/10"
-                  }`}
-                >
-                  {post.isShared && (
-                    <div className="mb-3 flex items-center gap-2 text-xs text-blue-400 bg-blue-500/8 px-3 py-1.5 rounded-lg border border-blue-500/15 w-fit">
-                      <Share2 size={11} />
-                      <span><strong>{post.sharedBy}님</strong>이 공유한 글</span>
-                    </div>
-                  )}
-                  <div className="flex items-start gap-4">
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-base font-semibold text-zinc-100 group-hover:text-white transition-colors line-clamp-1 mb-1.5">
-                        {post.title}
-                      </h3>
-                      <p className="text-sm text-zinc-500 line-clamp-2 mb-3 leading-relaxed">{post.content}</p>
-                      <div className="flex items-center gap-3 text-xs text-zinc-600">
-                        <span className="flex items-center gap-1"><Users size={11} />{post.isShared ? post.sharedBy : post.user.name}</span>
-                        <span>·</span>
-                        <span>{new Date(post.createdAt).toLocaleDateString("ko-KR")}</span>
-                        <span>·</span>
-                        <span className="flex items-center gap-1"><MessageSquare size={11} />{post._count.comments}</span>
-                      </div>
-                    </div>
-                    <span className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-full shrink-0 font-medium ${vis.cls}`}>
-                      <VisIcon size={10} />{vis.label}
-                    </span>
+
+              {(filterType === "ALL" || filterType === "FILE") && (
+                <div>
+                  <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">파일 타입</p>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { label: "전체", value: "", icon: LayoutGrid },
+                      { label: "이미지", value: "image", icon: Image },
+                      { label: "동영상", value: "video", icon: Film },
+                      { label: "PDF", value: "pdf", icon: FileText },
+                      { label: "문서", value: "document", icon: AlignLeft },
+                      { label: "압축", value: "zip", icon: FileArchive },
+                    ].map(({ label, value, icon: Icon }) => (
+                      <button key={value} onClick={() => setFilterMimeType(value)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border transition-all ${
+                          filterMimeType === value ? "bg-emerald-600 text-white border-emerald-600" : "bg-zinc-800/60 text-zinc-400 border-zinc-700 hover:border-zinc-500"
+                        }`}>
+                        <Icon size={11} />{label}
+                      </button>
+                    ))}
                   </div>
-                </Link>
-              );
-            })}
+                </div>
+              )}
+
+              {allTags.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+                    태그 {filterTagIds.length > 0 && <span className="text-violet-400 normal-case font-normal">{filterTagIds.length}개 선택</span>}
+                  </p>
+                  <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">
+                    {allTags.map((tag) => (
+                      <button key={tag.id} onClick={() => handleToggleTag(tag.id)}
+                        className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-all ${
+                          filterTagIds.includes(tag.id) ? "bg-orange-500/20 text-orange-400 border-orange-500/30" : "bg-zinc-800/60 text-zinc-500 border-zinc-700 hover:border-zinc-500"
+                        }`}>
+                        <TagIcon size={10} />{tag.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Calendar size={11} /> 업로드 날짜
+                </p>
+                {/* ✅ 날짜 input도 min-w-0 처리 */}
+                <div className="flex items-center gap-2">
+                  <input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)}
+                    className="flex-1 min-w-0 px-3 py-1.5 bg-zinc-900 border border-zinc-700 focus:border-violet-500 rounded-lg text-xs text-zinc-300 outline-none transition-colors" />
+                  <span className="text-zinc-600 text-xs shrink-0">~</span>
+                  <input type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)}
+                    className="flex-1 min-w-0 px-3 py-1.5 bg-zinc-900 border border-zinc-700 focus:border-violet-500 rounded-lg text-xs text-zinc-300 outline-none transition-colors" />
+                  {(filterDateFrom || filterDateTo) && (
+                    <button onClick={() => { setFilterDateFrom(""); setFilterDateTo(""); }} className="shrink-0 text-zinc-500 hover:text-red-400 transition-colors">
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <button onClick={() => handleSearch()}
+                className="w-full py-2.5 bg-violet-600 hover:bg-violet-500 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2">
+                <Search size={14} /> 필터 적용해서 검색
+              </button>
+            </div>
+          )}
+
+          {/* 저장된 검색 목록 */}
+          {showSavedList && savedSearches.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-white/6">
+              <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-3">저장된 검색</p>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {savedSearches.map((saved) => (
+                  <div key={saved.id} className="flex items-center gap-2 p-2.5 bg-zinc-900/60 rounded-xl border border-white/4">
+                    <button onClick={() => handleLoadSavedSearch(saved)} className="flex-1 text-left min-w-0">
+                      <p className="text-sm font-medium text-violet-400 hover:text-violet-300 transition-colors truncate">{saved.name}</p>
+                      {saved.query && <p className="text-xs text-zinc-600 truncate">"{saved.query}"</p>}
+                    </button>
+                    <button onClick={() => handleDeleteSavedSearch(saved.id)} className="shrink-0 p-1 text-zinc-600 hover:text-red-400 transition-colors">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 검색 결과 */}
+        {hasSearched && !loading && (
+          <div className="bg-white/3 border border-white/6 rounded-2xl p-5">
+            {results.total === 0 ? (
+              <div className="text-center py-10">
+                <Search size={32} className="text-zinc-700 mx-auto mb-3" />
+                <p className="text-zinc-400 mb-1">검색 결과가 없습니다</p>
+                <p className="text-zinc-600 text-sm">다른 검색어나 필터를 사용해보세요</p>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-5">
+                  <h2 className="text-sm font-semibold text-zinc-300">
+                    검색 결과 <span className="text-violet-400 ml-1">{results.total}개</span>
+                  </h2>
+                  <div className="flex gap-3 text-xs text-zinc-600">
+                    {results.files.length > 0 && <span className="flex items-center gap-1"><FileText size={11} />{results.files.length}</span>}
+                    {results.posts.length > 0 && <span className="flex items-center gap-1"><AlignLeft size={11} />{results.posts.length}</span>}
+                  </div>
+                </div>
+
+                {results.files.length > 0 && (
+                  <div className="mb-5">
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                      <FileText size={11} /> 파일 ({results.files.length})
+                    </p>
+                    <div className="space-y-2">
+                      {results.files.map((file: any) => (
+                        <div key={file.id} onClick={() => router.push("/dashboard")}
+                          className="flex items-center gap-3 p-3 bg-zinc-900/60 hover:bg-zinc-900 border border-white/4 hover:border-white/8 rounded-xl cursor-pointer transition-all">
+                          <div className="w-10 h-10 rounded-lg bg-zinc-800 flex-shrink-0 overflow-hidden">
+                            {file.thumbnailUrl ? (
+                              <img src={file.thumbnailUrl} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center">
+                                {file.mimeType?.startsWith("image/") ? <Image size={18} className="text-zinc-500" /> :
+                                 file.mimeType?.startsWith("video/") ? <Film size={18} className="text-zinc-500" /> :
+                                 <FileText size={18} className="text-zinc-500" />}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-sm text-zinc-200 truncate">{file.originalName}</p>
+                            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                              <span className="text-xs text-zinc-600">{(parseInt(file.size) / 1024 / 1024).toFixed(2)} MB</span>
+                              <span className="text-zinc-700">·</span>
+                              <span className="text-xs text-zinc-600">{new Date(file.createdAt).toLocaleDateString("ko-KR")}</span>
+                              {file.fileTags?.map((ft: any) => (
+                                <span key={ft.tag.id} className="px-1.5 py-0.5 text-[10px] bg-violet-500/10 text-violet-400 rounded-full">{ft.tag.name}</span>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {results.posts.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                      <AlignLeft size={11} /> 게시글 ({results.posts.length})
+                    </p>
+                    <div className="space-y-2">
+                      {results.posts.map((post: any) => (
+                        <Link key={post.id} href={`/posts/${post.id}`}
+                          className="block p-3 bg-zinc-900/60 hover:bg-zinc-900 border border-white/4 hover:border-white/8 rounded-xl transition-all">
+                          <div className="flex items-start gap-3">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-sm text-zinc-200 truncate">{post.title}</p>
+                              <p className="text-xs text-zinc-600 mt-0.5 line-clamp-1">{post.content}</p>
+                            </div>
+                            <span className={`shrink-0 px-2 py-0.5 text-[10px] rounded-full font-medium ${
+                              post.visibility === "PUBLIC" ? "bg-emerald-500/10 text-emerald-400" :
+                              post.visibility === "SHARED" ? "bg-blue-500/10 text-blue-400" :
+                              "bg-zinc-700/60 text-zinc-500"
+                            }`}>
+                              {post.visibility === "PUBLIC" ? "공개" : post.visibility === "SHARED" ? "공유" : "비공개"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            <span className="text-xs text-zinc-600">{new Date(post.createdAt).toLocaleDateString("ko-KR")}</span>
+                            {post.postTags?.map((pt: any) => (
+                              <span key={pt.tag.id} className="px-1.5 py-0.5 text-[10px] bg-orange-500/10 text-orange-400 rounded-full">{pt.tag.name}</span>
+                            ))}
+                          </div>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </main>
+
+      {/* 검색 저장 모달 */}
+      {showSaveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setShowSaveModal(false)}>
+          <div className="bg-zinc-900 border border-white/8 rounded-2xl shadow-2xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-semibold text-zinc-100 mb-4 flex items-center gap-2">
+              <Save size={16} className="text-violet-400" /> 검색 저장
+            </h3>
+            <input
+              type="text" value={saveSearchName} onChange={(e) => setSaveSearchName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSaveSearch()}
+              placeholder="저장할 검색 이름"
+              className="w-full px-4 py-2.5 bg-zinc-800 border border-zinc-700 focus:border-violet-500 rounded-xl text-sm text-zinc-100 placeholder:text-zinc-600 outline-none mb-4 transition-colors"
+              autoFocus
+            />
+            <div className="text-xs text-zinc-600 mb-5 space-y-1 bg-zinc-800/50 rounded-xl p-3">
+              {query && <p>검색어: <span className="text-zinc-400">"{query}"</span></p>}
+              {filterType !== "ALL" && <p>대상: <span className="text-zinc-400">{filterType}</span></p>}
+              {filterMimeType && <p>타입: <span className="text-zinc-400">{filterMimeType}</span></p>}
+              {filterTagIds.length > 0 && <p>태그: <span className="text-zinc-400">{filterTagIds.length}개</span></p>}
+              {(filterDateFrom || filterDateTo) && <p>날짜: <span className="text-zinc-400">{filterDateFrom} ~ {filterDateTo}</span></p>}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowSaveModal(false)} className="px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800 rounded-xl transition-colors">취소</button>
+              <button onClick={handleSaveSearch} className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 text-white rounded-xl transition-colors font-medium">저장</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -20014,16 +19611,21 @@ export const paginationSchema = z.object({
 
 export const idSchema = z.string().cuid({ message: "유효하지 않은 ID입니다" });
 
+// ✅ [UI/UX-2] 공통 passwordSchema — 모든 인증 관련 API에서 공유
+// register, reset-password, change-password 규칙을 통일하여 불일치 방지
+export const passwordSchema = z
+  .string()
+  .min(8, "비밀번호는 8자 이상이어야 합니다")
+  .max(100, "비밀번호는 100자 이하이어야 합니다")
+  .regex(/[a-zA-Z]/, "영문자를 포함해야 합니다")
+  .regex(/[0-9]/, "숫자를 포함해야 합니다");
+
 // ── 인증 ─────────────────────────────────────────────────
 export const registerSchema = z.object({
   name:     z.string().min(2, "이름은 2자 이상이어야 합니다").max(50),
   email:    z.string().email("올바른 이메일 형식이 아닙니다"),
-  password: z.string()
-    .min(8,  "비밀번호는 8자 이상이어야 합니다")
-    .max(100)
-    .regex(/[A-Z]/,  "대문자를 포함해야 합니다")
-    .regex(/[0-9]/,  "숫자를 포함해야 합니다")
-    .regex(/[^A-Za-z0-9]/, "특수문자를 포함해야 합니다"),
+  // ✅ [UI/UX-2] 공통 passwordSchema 사용
+  password: passwordSchema,
 });
 
 export const loginSchema = z.object({
@@ -20033,7 +19635,8 @@ export const loginSchema = z.object({
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, "현재 비밀번호를 입력해주세요"),
-  newPassword:     z.string().min(8, "새 비밀번호는 8자 이상이어야 합니다"),
+  // ✅ [UI/UX-2] 공통 passwordSchema 사용
+  newPassword: passwordSchema,
 }).refine((d) => d.currentPassword !== d.newPassword, {
   message: "새 비밀번호는 현재 비밀번호와 달라야 합니다",
   path:    ["newPassword"],
@@ -20082,17 +19685,17 @@ export const sendMessageSchema = z.object({
 
 // ── 알림 설정 ─────────────────────────────────────────────
 export const notificationSettingsSchema = z.object({
-  emailNotifications:  z.boolean().optional(),
-  pushNotifications:   z.boolean().optional(),
-  chatNotifications:   z.boolean().optional(),
+  emailNotifications:   z.boolean().optional(),
+  pushNotifications:    z.boolean().optional(),
+  chatNotifications:    z.boolean().optional(),
   mentionNotifications: z.boolean().optional(),
 });
 
 // ── API 키 ────────────────────────────────────────────────
 export const createApiKeySchema = z.object({
-  name:           z.string().min(1, "이름을 입력해주세요").max(100),
-  scopes:         z.array(z.string()).min(1, "권한을 하나 이상 선택해주세요"),
-  expiresInDays:  z.number().int().min(0).max(365).optional(),
+  name:          z.string().min(1, "이름을 입력해주세요").max(100),
+  scopes:        z.array(z.string()).min(1, "권한을 하나 이상 선택해주세요"),
+  expiresInDays: z.number().int().min(0).max(365).optional(),
 });
 
 // ── 시스템 공지 ───────────────────────────────────────────
@@ -20351,7 +19954,8 @@ module.exports = nextConfig;
 
 <file path="package.json">
 {
-  "name": "personal-cloud",  "version": "0.1.0",
+  "name": "personal-cloud",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "node server.js",
@@ -20369,6 +19973,7 @@ module.exports = nextConfig;
     "archiver": "^7.0.1",
     "bcryptjs": "^3.0.3",
     "date-fns": "^4.1.0",
+    "file-type": "^21.3.0",
     "firebase": "^12.9.0",
     "firebase-admin": "^13.6.1",
     "lucide-react": "^0.575.0",
@@ -21160,6 +20765,364 @@ export async function GET(request: NextRequest) {
 }
 </file>
 
+<file path="src/app/chat/page.tsx">
+"use client";
+// src/app/chat/page.tsx — EUM 브랜딩 고도화 + 모바일 검색버튼 overflow 수정
+
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
+import { useSocket } from "@/hooks/useSocket";
+import { toast } from "@/components/Toast";
+import {
+  MessageSquare, Plus, ChevronLeft, Search,
+  Phone, Video, Users, Wifi, WifiOff,
+} from "lucide-react";
+
+interface ChatRoom {
+  id: string;
+  name: string | null;
+  type: "DIRECT" | "GROUP";
+  members: any[];
+  messages: any[];
+  unreadCount: number;
+  updatedAt: string;
+}
+
+export default function ChatPage() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+  const { socket, isConnected } = useSocket();
+
+  const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showNewChatModal, setShowNewChatModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [creatingUserId, setCreatingUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (status === "unauthenticated") router.push("/login");
+  }, [status, router]);
+
+  const fetchChatRooms = useCallback(async () => {
+    try {
+      const res = await fetch("/api/chat/rooms");
+      if (res.ok) setChatRooms((await res.json()).chatRooms || []);
+    } catch { console.error("채팅방 목록 로드 실패"); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (session) fetchChatRooms();
+  }, [session, fetchChatRooms]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleNewMessage = (data: any) => {
+      setChatRooms((prev) => {
+        const idx = prev.findIndex((r) => r.id === data.chatRoomId);
+        if (idx === -1) return prev;
+        const updated = [...prev];
+        const room = { ...updated[idx] };
+        room.messages = [data];
+        room.updatedAt = data.createdAt || new Date().toISOString();
+        if (data.senderId !== session?.user?.id) room.unreadCount = (room.unreadCount || 0) + 1;
+        updated.splice(idx, 1);
+        return [room, ...updated];
+      });
+    };
+    socket.on("message:receive", handleNewMessage);
+    socket.on("message:new", handleNewMessage);
+    return () => { socket.off("message:receive", handleNewMessage); socket.off("message:new", handleNewMessage); };
+  }, [socket, session?.user?.id]);
+
+  const searchUsers = async () => {
+    if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    try {
+      const res = await fetch(`/api/users/search?q=${encodeURIComponent(searchQuery)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSearchResults(data.users || []);
+        if ((data.users || []).length === 0) toast.info("검색 결과가 없습니다");
+      }
+    } catch { toast.error("사용자 검색에 실패했습니다"); }
+    finally { setIsSearching(false); }
+  };
+
+  const createChatRoom = async (otherUserId: string) => {
+    setIsCreating(true);
+    setCreatingUserId(otherUserId);
+    try {
+      const res = await fetch("/api/chat/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ participantId: otherUserId, type: "DIRECT" }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        router.push(`/chat/${data.chatRoom.id}`);
+      } else {
+        toast.error("채팅방 생성에 실패했습니다");
+      }
+    } catch { toast.error("채팅방 생성 중 오류가 발생했습니다"); }
+    finally { setIsCreating(false); setCreatingUserId(null); }
+  };
+
+  const closeModal = () => { setShowNewChatModal(false); setSearchResults([]); setSearchQuery(""); };
+
+  const getChatRoomName = (chatRoom: ChatRoom) => {
+    if (chatRoom.type === "GROUP") return chatRoom.name || "그룹 채팅";
+    const other = chatRoom.members.find((m) => m.user.id !== session?.user?.id);
+    return other?.user.name || "알 수 없음";
+  };
+
+  const isOnline = (chatRoom: ChatRoom) => {
+    if (chatRoom.type !== "DIRECT") return false;
+    const other = chatRoom.members.find((m) => m.user.id !== session?.user?.id);
+    return other?.user?.isOnline ?? false;
+  };
+
+  const getLastMessage = (chatRoom: ChatRoom) => {
+    if (!chatRoom.messages?.length) return "메시지가 없습니다";
+    const last = chatRoom.messages[0];
+    if (last.type === "FILE") return "📎 파일";
+    if (last.type === "CALL_LOG") return "📞 통화";
+    if (last.type === "SYSTEM") return last.content || "시스템 메시지";
+    return last.content || "메시지가 없습니다";
+  };
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return "";
+    const now = new Date();
+    if (date.toDateString() === now.toDateString())
+      return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (date.toDateString() === yesterday.toDateString()) return "어제";
+    return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
+  };
+
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-950">
+        <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+  if (!session) return null;
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      {/* 배경 장식 */}
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-0 right-0 w-80 h-80 bg-blue-600/5 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/4 left-0 w-64 h-64 bg-violet-600/4 rounded-full blur-3xl" />
+      </div>
+
+      {/* 헤더 */}
+      <header className="sticky top-0 z-20 bg-zinc-950/80 backdrop-blur-xl border-b border-white/5">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Link href="/dashboard" className="p-1.5 rounded-lg hover:bg-white/5 transition-colors text-zinc-400 hover:text-zinc-200">
+              <ChevronLeft size={20} />
+            </Link>
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center">
+                <MessageSquare size={14} className="text-white" />
+              </div>
+              <h1 className="text-lg font-bold tracking-tight">채팅</h1>
+              {/* 연결 상태 */}
+              <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                isConnected
+                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                  : "bg-zinc-800 text-zinc-500 border-zinc-700"
+              }`}>
+                {isConnected ? <Wifi size={9} /> : <WifiOff size={9} />}
+                {isConnected ? "연결됨" : "연결 중"}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => setShowNewChatModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            <Plus size={14} />
+            새 채팅
+          </button>
+        </div>
+      </header>
+
+      {/* 채팅방 목록 */}
+      <main className="max-w-2xl mx-auto px-4 py-4 relative">
+        {loading ? (
+          <div className="space-y-2">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-white/3 rounded-2xl p-4 flex gap-3 animate-pulse">
+                <div className="w-12 h-12 rounded-full bg-white/5 shrink-0" />
+                <div className="flex-1 space-y-2 py-1">
+                  <div className="h-4 bg-white/5 rounded w-1/3" />
+                  <div className="h-3 bg-white/3 rounded w-2/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : chatRooms.length === 0 ? (
+          <div className="text-center py-20">
+            <div className="w-16 h-16 rounded-2xl bg-white/4 flex items-center justify-center mx-auto mb-4">
+              <MessageSquare size={28} className="text-zinc-600" />
+            </div>
+            <p className="text-zinc-400 mb-1">아직 대화가 없어요</p>
+            <p className="text-zinc-600 text-sm mb-6">새 채팅을 시작해보세요</p>
+            <button
+              onClick={() => setShowNewChatModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              <Plus size={14} />첫 채팅 시작하기
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {chatRooms.map((chatRoom) => {
+              const online = isOnline(chatRoom);
+              const name = getChatRoomName(chatRoom);
+              const initial = name[0]?.toUpperCase() || "?";
+              return (
+                <Link
+                  key={chatRoom.id}
+                  href={`/chat/${chatRoom.id}`}
+                  className="flex items-center gap-3 bg-white/3 hover:bg-white/5 border border-white/5 hover:border-white/10 rounded-2xl p-4 transition-all duration-200 group"
+                >
+                  {/* 아바타 */}
+                  <div className="relative shrink-0">
+                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-white/8 flex items-center justify-center text-blue-300 font-bold text-lg">
+                      {initial}
+                    </div>
+                    {chatRoom.type === "GROUP" && (
+                      <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center">
+                        <Users size={10} className="text-zinc-400" />
+                      </div>
+                    )}
+                    {online && chatRoom.type === "DIRECT" && (
+                      <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-zinc-950" />
+                    )}
+                  </div>
+
+                  {/* 내용 */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="font-semibold text-zinc-100 text-sm group-hover:text-white transition-colors">{name}</span>
+                      <span className="text-xs text-zinc-600 shrink-0 ml-2">{formatDate(chatRoom.updatedAt)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-zinc-500 truncate">{getLastMessage(chatRoom)}</p>
+                      {chatRoom.unreadCount > 0 && (
+                        <span className="ml-2 min-w-[20px] h-5 px-1.5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center shrink-0 font-medium">
+                          {chatRoom.unreadCount > 99 ? "99+" : chatRoom.unreadCount}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </main>
+
+      {/* 새 채팅 모달 */}
+      {showNewChatModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          onClick={closeModal}
+        >
+          <div
+            className="bg-zinc-900 border border-white/8 rounded-2xl shadow-2xl w-full max-w-md p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold mb-1 text-zinc-100">새 채팅 시작</h3>
+            <p className="text-xs text-zinc-500 mb-4">이름 또는 이메일로 사용자를 검색하세요</p>
+
+            {/* ✅ 모바일 overflow 수정: flex-1 min-w-0 on input wrapper + shrink-0 on button */}
+            <div className="flex gap-2 mb-4">
+              <div className="flex-1 min-w-0 relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && searchUsers()}
+                  placeholder="이름 또는 이메일로 검색"
+                  className="w-full pl-9 pr-4 py-2.5 bg-zinc-800 border border-zinc-700 focus:border-blue-500 rounded-xl outline-none text-sm text-zinc-100 placeholder:text-zinc-600 transition-colors"
+                  autoFocus
+                />
+              </div>
+              <button
+                onClick={searchUsers}
+                disabled={isSearching || !searchQuery.trim()}
+                className="shrink-0 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {isSearching
+                  ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin block" />
+                  : "검색"}
+              </button>
+            </div>
+
+            {/* 검색 결과 */}
+            {searchResults.length > 0 && (
+              <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
+                {searchResults.map((user) => (
+                  <button
+                    key={user.id}
+                    onClick={() => createChatRoom(user.id)}
+                    disabled={isCreating}
+                    className="w-full p-3 text-left bg-zinc-800/60 hover:bg-zinc-800 border border-zinc-700 hover:border-blue-500/40 rounded-xl transition-all disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="relative shrink-0">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-white/8 flex items-center justify-center text-blue-300 font-bold">
+                          {user.name?.[0]?.toUpperCase() || "?"}
+                        </div>
+                        {user.isOnline && (
+                          <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-zinc-900" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-zinc-100 text-sm">{user.name}</p>
+                        <p className="text-xs text-zinc-500 truncate">{user.email}</p>
+                      </div>
+                      <div className="shrink-0 flex items-center gap-1.5">
+                        {creatingUserId === user.id && isCreating
+                          ? <span className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                          : (
+                            <div className="flex gap-1">
+                              <span className="p-1.5 rounded-lg bg-zinc-700/50 text-zinc-400"><Phone size={12} /></span>
+                              <span className="p-1.5 rounded-lg bg-zinc-700/50 text-zinc-400"><Video size={12} /></span>
+                            </div>
+                          )}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <button onClick={closeModal} className="px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800 rounded-xl transition-colors">닫기</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+</file>
+
 <file path="src/app/error.tsx">
 "use client";
 
@@ -21656,6 +21619,226 @@ export default function OfflinePage() {
           © 2026 EUM CLOUD SERVICE
         </p>
       </div>
+    </div>
+  );
+}
+</file>
+
+<file path="src/app/posts/page.tsx">
+"use client";
+// src/app/posts/page.tsx — EUM 브랜딩 고도화
+
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import SearchBar from "@/components/SearchBar";
+import {
+  PenSquare, Globe, Lock, Share2, MessageSquare,
+  ChevronLeft, Sparkles, BookOpen, Users,
+} from "lucide-react";
+
+interface Post {
+  id: string;
+  title: string;
+  content: string;
+  visibility: string;
+  createdAt: string;
+  user: { id: string; name: string };
+  _count: { comments: number };
+  isOwner: boolean;
+  isShared: boolean;
+  sharedBy?: string;
+}
+
+const FILTERS = [
+  { key: "all",    label: "전체",     icon: BookOpen,  active: "bg-violet-600 text-white border-violet-600",   inactive: "text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200" },
+  { key: "my",     label: "내 글",    icon: PenSquare, active: "bg-violet-600 text-white border-violet-600",   inactive: "text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200" },
+  { key: "public", label: "공개",     icon: Globe,     active: "bg-emerald-600 text-white border-emerald-600", inactive: "text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200" },
+  { key: "shared", label: "공유받음", icon: Share2,    active: "bg-blue-600 text-white border-blue-600",       inactive: "text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200" },
+] as const;
+
+const VISIBILITY_META = {
+  PUBLIC:  { label: "공개",   icon: Globe,   cls: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" },
+  SHARED:  { label: "공유",   icon: Share2,  cls: "bg-blue-500/10 text-blue-400 border border-blue-500/20" },
+  PRIVATE: { label: "비공개", icon: Lock,    cls: "bg-zinc-700/60 text-zinc-400 border border-zinc-600/30" },
+};
+
+export default function PostsPage() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<"all" | "my" | "public" | "shared">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  useEffect(() => {
+    if (status === "unauthenticated") router.push("/login");
+  }, [status, router]);
+
+  useEffect(() => {
+    if (session) fetchPosts();
+  }, [session, filter, searchQuery]);
+
+  const fetchPosts = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (filter !== "all") params.set("visibility", filter);
+      if (searchQuery) params.set("search", searchQuery);
+      const res = await fetch(`/api/posts?${params}`);
+      if (res.ok) setPosts((await res.json()).posts);
+    } catch (err) {
+      console.error("Failed to fetch posts:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-950">
+        <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+  if (!session) return null;
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      {/* 배경 장식 */}
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-violet-600/6 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/3 right-1/4 w-64 h-64 bg-blue-600/5 rounded-full blur-3xl" />
+      </div>
+
+      {/* 헤더 */}
+      <header className="sticky top-0 z-20 bg-zinc-950/80 backdrop-blur-xl border-b border-white/5">
+        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Link href="/dashboard" className="p-1.5 rounded-lg hover:bg-white/5 transition-colors text-zinc-400 hover:text-zinc-200">
+              <ChevronLeft size={20} />
+            </Link>
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center">
+                <BookOpen size={14} className="text-white" />
+              </div>
+              <h1 className="text-lg font-bold tracking-tight">게시판</h1>
+            </div>
+          </div>
+          <Link
+            href="/posts/new"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            <PenSquare size={14} />
+            글쓰기
+          </Link>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-6 relative">
+
+        {/* 필터 탭 */}
+        <div className="flex gap-2 mb-5 overflow-x-auto pb-1 scrollbar-hide">
+          {FILTERS.map(({ key, label, icon: Icon, active, inactive }) => (
+            <button
+              key={key}
+              onClick={() => setFilter(key as any)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium whitespace-nowrap transition-all shrink-0 ${
+                filter === key ? active : inactive
+              }`}
+            >
+              <Icon size={13} />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* 검색 */}
+        <div className="mb-5">
+          <SearchBar onSearch={setSearchQuery} placeholder="게시글 검색..." />
+        </div>
+
+        {/* 공개 설정 안내 배너 */}
+        <div className="mb-6 p-4 rounded-xl bg-white/3 border border-white/6 text-sm text-zinc-400 flex gap-3">
+          <Sparkles size={16} className="text-violet-400 shrink-0 mt-0.5" />
+          <div>
+            <span className="text-zinc-300 font-medium block mb-1">공개 설정 안내</span>
+            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+              <span><Lock size={11} className="inline mr-1 text-zinc-500" />비공개: 나만</span>
+              <span><Share2 size={11} className="inline mr-1 text-blue-400" />공유: 특정 사용자</span>
+              <span><Globe size={11} className="inline mr-1 text-emerald-400" />공개: 전체</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 게시글 목록 */}
+        {loading ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-white/3 rounded-2xl p-5 animate-pulse">
+                <div className="h-4 bg-white/5 rounded w-2/3 mb-3" />
+                <div className="h-3 bg-white/4 rounded w-full mb-2" />
+                <div className="h-3 bg-white/4 rounded w-1/2" />
+              </div>
+            ))}
+          </div>
+        ) : posts.length === 0 ? (
+          <div className="py-20 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-white/4 flex items-center justify-center mx-auto mb-4">
+              <BookOpen size={28} className="text-zinc-600" />
+            </div>
+            <p className="text-zinc-400 mb-1">게시글이 없습니다</p>
+            <p className="text-zinc-600 text-sm mb-6">
+              {filter === "shared" ? "공유받은 글이 없습니다" : "첫 게시글을 작성해보세요"}
+            </p>
+            <Link href="/posts/new" className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white rounded-lg text-sm font-medium transition-colors">
+              <PenSquare size={14} />글 작성하기
+            </Link>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {posts.map((post) => {
+              const vis = VISIBILITY_META[post.visibility as keyof typeof VISIBILITY_META] ?? VISIBILITY_META.PRIVATE;
+              const VisIcon = vis.icon;
+              return (
+                <Link
+                  key={post.id}
+                  href={`/posts/${post.id}`}
+                  className={`group block bg-white/3 hover:bg-white/5 border rounded-2xl p-5 transition-all duration-200 ${
+                    post.isShared ? "border-blue-500/20 hover:border-blue-500/30" : "border-white/5 hover:border-white/10"
+                  }`}
+                >
+                  {post.isShared && (
+                    <div className="mb-3 flex items-center gap-2 text-xs text-blue-400 bg-blue-500/8 px-3 py-1.5 rounded-lg border border-blue-500/15 w-fit">
+                      <Share2 size={11} />
+                      <span><strong>{post.sharedBy}님</strong>이 공유한 글</span>
+                    </div>
+                  )}
+                  <div className="flex items-start gap-4">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-base font-semibold text-zinc-100 group-hover:text-white transition-colors line-clamp-1 mb-1.5">
+                        {post.title}
+                      </h3>
+                      <p className="text-sm text-zinc-500 line-clamp-2 mb-3 leading-relaxed">{post.content}</p>
+                      <div className="flex items-center gap-3 text-xs text-zinc-600">
+                        <span className="flex items-center gap-1"><Users size={11} />{post.isShared ? post.sharedBy : post.user.name}</span>
+                        <span>·</span>
+                        <span>{new Date(post.createdAt).toLocaleDateString("ko-KR")}</span>
+                        <span>·</span>
+                        <span className="flex items-center gap-1"><MessageSquare size={11} />{post._count.comments}</span>
+                      </div>
+                    </div>
+                    <span className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-full shrink-0 font-medium ${vis.cls}`}>
+                      <VisIcon size={10} />{vis.label}
+                    </span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </main>
     </div>
   );
 }
@@ -22549,7 +22732,7 @@ export const getMediaStream = async (video: boolean = true): Promise<MediaStream
   try {
     return await navigator.mediaDevices.getUserMedia({
       video: video ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-      // ✅ 수정: audio 제약조건 명시 — echo/noise 캔슬링, mono 채널로 안정성 확보
+      // ✅ audio 제약조건 명시 — echo/noise 캔슬링, mono 채널로 안정성 확보
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
@@ -22571,6 +22754,7 @@ export const getMediaStream = async (video: boolean = true): Promise<MediaStream
 //   2. srcObject 매번 재할당으로 연결 누락 방지
 //   3. play() promise 처리로 autoplay 차단 대응
 //   4. audio track을 video보다 먼저 addTrack (SDP 협상 우선순위)
+//   5. [기능-2] ICE Candidate 버퍼링 — setRemoteDescription 전까지 큐에 보관
 // ─────────────────────────────────────────────────────────────
 export interface WebRTCConfig {
   iceServers?: RTCIceServer[];
@@ -22586,6 +22770,10 @@ export class WebRTCManager {
   private remoteAudioEl: HTMLAudioElement | null = null;
   private config: WebRTCConfig;
 
+  // ✅ [기능-2] ICE Candidate 버퍼: setRemoteDescription 전에 도착한 candidate 보관
+  private pendingCandidates: RTCIceCandidateInit[] = [];
+  private hasRemoteDescription = false;
+
   constructor(config: WebRTCConfig = {}) {
     this.config = config;
   }
@@ -22596,24 +22784,28 @@ export class WebRTCManager {
       this.pc.close();
     }
 
+    // ✅ [기능-2] PeerConnection 재생성 시 버퍼 초기화
+    this.pendingCandidates = [];
+    this.hasRemoteDescription = false;
+
     this.pc = new RTCPeerConnection(
       this.config.iceServers
         ? { iceServers: this.config.iceServers }
-        : ICE_SERVERS  // ✅ 기존 ICE_SERVERS 재사용
+        : ICE_SERVERS
     );
 
-    // ✅ 핵심 수정 1: ontrack에서 audio/video 구분 처리
+    // ✅ ontrack에서 audio/video 구분 처리
     this.pc.ontrack = (event) => {
       const [remoteStream] = event.streams;
       if (!remoteStream) return;
 
-      // ✅ 핵심 수정 2: stream 교체 시마다 콜백 + audio element 재설정
+      // stream 교체 시마다 콜백 + audio element 재설정
       if (this.remoteStream?.id !== remoteStream.id) {
         this.remoteStream = remoteStream;
         this.config.onRemoteStream?.(remoteStream);
       }
 
-      // ✅ 핵심 수정 3: audio track은 전용 element에 직접 attach
+      // audio track은 전용 element에 직접 attach
       if (event.track.kind === "audio") {
         this.attachRemoteAudio(remoteStream);
       }
@@ -22633,13 +22825,12 @@ export class WebRTCManager {
     return this.pc;
   }
 
-  // ✅ 핵심 수정 4: 전용 <audio> element 생성 및 srcObject 재할당
+  // ✅ 전용 <audio> element 생성 및 srcObject 재할당
   private attachRemoteAudio(stream: MediaStream) {
     try {
       if (!this.remoteAudioEl) {
         this.remoteAudioEl = document.createElement("audio");
         this.remoteAudioEl.autoplay = true;
-        // ✅ 수정: playsInline은 HTMLVideoElement 전용 — HTMLAudioElement에 없음
         this.remoteAudioEl.style.display = "none";
         document.body.appendChild(this.remoteAudioEl);
       }
@@ -22647,7 +22838,7 @@ export class WebRTCManager {
       // 동일 stream이라도 srcObject 재할당 (연결 누락 방지)
       this.remoteAudioEl.srcObject = stream;
 
-      // ✅ 핵심 수정 5: play() promise 처리 — autoplay 차단 시 재시도
+      // play() promise 처리 — autoplay 차단 시 재시도
       const playPromise = this.remoteAudioEl.play();
       if (playPromise !== undefined) {
         playPromise.catch(() => {
@@ -22679,7 +22870,7 @@ export class WebRTCManager {
     const src = stream ?? this.localStream;
     if (!src || !this.pc) return;
 
-    // ✅ 핵심 수정 6: audio 먼저 추가 (SDP 협상 우선순위 확보)
+    // audio 먼저 추가 (SDP 협상 우선순위 확보)
     src.getAudioTracks().forEach((track) => {
       this.pc!.addTrack(track, src);
     });
@@ -22706,13 +22897,37 @@ export class WebRTCManager {
     return answer;
   }
 
+  // ✅ [기능-2] setRemoteDescription 후 버퍼에 쌓인 candidate 일괄 처리
   async setRemoteDescription(sdp: RTCSessionDescriptionInit) {
     if (!this.pc) throw new Error("PeerConnection이 초기화되지 않았습니다");
     await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    this.hasRemoteDescription = true;
+
+    // 버퍼에 쌓인 ICE candidate 일괄 적용
+    if (this.pendingCandidates.length > 0) {
+      console.debug(`[WebRTC] Flushing ${this.pendingCandidates.length} buffered ICE candidates`);
+      for (const candidate of this.pendingCandidates) {
+        try {
+          await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.warn("[WebRTC] Failed to apply buffered ICE candidate:", err);
+        }
+      }
+      this.pendingCandidates = [];
+    }
   }
 
+  // ✅ [기능-2] remoteDescription 미설정 시 candidate를 버퍼에 보관
   async addIceCandidate(candidate: RTCIceCandidateInit) {
     if (!this.pc) throw new Error("PeerConnection이 초기화되지 않았습니다");
+
+    if (!this.hasRemoteDescription) {
+      // remoteDescription이 아직 없으면 버퍼에 저장
+      console.debug("[WebRTC] Buffering ICE candidate (remoteDescription not set yet)");
+      this.pendingCandidates.push(candidate);
+      return;
+    }
+
     try {
       await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
     } catch {
@@ -22743,6 +22958,10 @@ export class WebRTCManager {
     this.pc?.close();
     this.pc = null;
     this.remoteStream = null;
+
+    // ✅ [기능-2] 정리 시 버퍼도 초기화
+    this.pendingCandidates = [];
+    this.hasRemoteDescription = false;
   }
 
   // ─── Getters ────────────────────────────────────────────
@@ -22941,6 +23160,7 @@ export default config;
         "archiver": "^7.0.1",
         "bcryptjs": "^3.0.3",
         "date-fns": "^4.1.0",
+        "file-type": "^21.3.0",
         "firebase": "^12.9.0",
         "firebase-admin": "^13.6.1",
         "lucide-react": "^0.575.0",
@@ -23553,6 +23773,16 @@ export default config;
       "integrity": "sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==",
       "dev": true,
       "license": "MIT"
+    },
+    "node_modules/@borewit/text-codec": {
+      "version": "0.2.1",
+      "resolved": "https://registry.npmjs.org/@borewit/text-codec/-/text-codec-0.2.1.tgz",
+      "integrity": "sha512-k7vvKPbf7J2fZ5klGRD9AeKfUvojuZIQ3BT5u7Jfv+puwXkUBUT5PVyMDfJZpy30CBDXGMgw7fguK/lpOMBvgw==",
+      "license": "MIT",
+      "funding": {
+        "type": "github",
+        "url": "https://github.com/sponsors/Borewit"
+      }
     },
     "node_modules/@colors/colors": {
       "version": "1.6.0",
@@ -26703,6 +26933,29 @@ export default config;
           "optional": true
         }
       }
+    },
+    "node_modules/@tokenizer/inflate": {
+      "version": "0.4.1",
+      "resolved": "https://registry.npmjs.org/@tokenizer/inflate/-/inflate-0.4.1.tgz",
+      "integrity": "sha512-2mAv+8pkG6GIZiF1kNg1jAjh27IDxEPKwdGul3snfztFerfPGI1LjDezZp3i7BElXompqEtPmoPx6c2wgtWsOA==",
+      "license": "MIT",
+      "dependencies": {
+        "debug": "^4.4.3",
+        "token-types": "^6.1.1"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "type": "github",
+        "url": "https://github.com/sponsors/Borewit"
+      }
+    },
+    "node_modules/@tokenizer/token": {
+      "version": "0.3.0",
+      "resolved": "https://registry.npmjs.org/@tokenizer/token/-/token-0.3.0.tgz",
+      "integrity": "sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A==",
+      "license": "MIT"
     },
     "node_modules/@tootallnate/once": {
       "version": "2.0.0",
@@ -29992,6 +30245,7 @@ export default config;
       "integrity": "sha512-whOE1HFo/qJDyX4SnXzP4N6zOWn79WhnCUY/iDR0mPfQZO8wcYE4JClzI2oZrhBnnMUCBCHZhO6VQyoBU95mZA==",
       "dev": true,
       "license": "MIT",
+      "peer": true,
       "dependencies": {
         "@rtsao/scc": "^1.1.0",
         "array-includes": "^3.1.9",
@@ -30565,6 +30819,24 @@ export default config;
       "license": "MIT",
       "dependencies": {
         "moment": "^2.29.1"
+      }
+    },
+    "node_modules/file-type": {
+      "version": "21.3.0",
+      "resolved": "https://registry.npmjs.org/file-type/-/file-type-21.3.0.tgz",
+      "integrity": "sha512-8kPJMIGz1Yt/aPEwOsrR97ZyZaD1Iqm8PClb1nYFclUCkBi0Ma5IsYNQzvSFS9ib51lWyIw5mIT9rWzI/xjpzA==",
+      "license": "MIT",
+      "dependencies": {
+        "@tokenizer/inflate": "^0.4.1",
+        "strtok3": "^10.3.4",
+        "token-types": "^6.1.1",
+        "uint8array-extras": "^1.4.0"
+      },
+      "engines": {
+        "node": ">=20"
+      },
+      "funding": {
+        "url": "https://github.com/sindresorhus/file-type?sponsor=1"
       }
     },
     "node_modules/fill-range": {
@@ -36613,6 +36885,22 @@ export default config;
       "license": "MIT",
       "optional": true
     },
+    "node_modules/strtok3": {
+      "version": "10.3.4",
+      "resolved": "https://registry.npmjs.org/strtok3/-/strtok3-10.3.4.tgz",
+      "integrity": "sha512-KIy5nylvC5le1OdaaoCJ07L+8iQzJHGH6pWDuzS+d07Cu7n1MZ2x26P8ZKIWfbK02+XIL8Mp4RkWeqdUCrDMfg==",
+      "license": "MIT",
+      "dependencies": {
+        "@tokenizer/token": "^0.3.0"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "type": "github",
+        "url": "https://github.com/sponsors/Borewit"
+      }
+    },
     "node_modules/stubs": {
       "version": "3.0.0",
       "resolved": "https://registry.npmjs.org/stubs/-/stubs-3.0.0.tgz",
@@ -37046,6 +37334,24 @@ export default config;
         "node": ">=8.0"
       }
     },
+    "node_modules/token-types": {
+      "version": "6.1.2",
+      "resolved": "https://registry.npmjs.org/token-types/-/token-types-6.1.2.tgz",
+      "integrity": "sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==",
+      "license": "MIT",
+      "dependencies": {
+        "@borewit/text-codec": "^0.2.1",
+        "@tokenizer/token": "^0.3.0",
+        "ieee754": "^1.2.1"
+      },
+      "engines": {
+        "node": ">=14.16"
+      },
+      "funding": {
+        "type": "github",
+        "url": "https://github.com/sponsors/Borewit"
+      }
+    },
     "node_modules/tough-cookie": {
       "version": "5.1.2",
       "resolved": "https://registry.npmjs.org/tough-cookie/-/tough-cookie-5.1.2.tgz",
@@ -37370,6 +37676,18 @@ export default config;
       },
       "engines": {
         "node": ">=0.8.0"
+      }
+    },
+    "node_modules/uint8array-extras": {
+      "version": "1.5.0",
+      "resolved": "https://registry.npmjs.org/uint8array-extras/-/uint8array-extras-1.5.0.tgz",
+      "integrity": "sha512-rvKSBiC5zqCCiDZ9kAOszZcDvdAHwwIKJG33Ykj43OKcWsnmcBRL09YTU4nOeHZ8Y2a7l1MgTd08SBe9A8Qj6A==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
       }
     },
     "node_modules/unbox-primitive": {
@@ -38530,6 +38848,7 @@ input:-webkit-autofill:focus {
 // src/lib/emit-notification.ts
 import { prisma } from "@/lib/db";
 import { Prisma } from "@prisma/client";
+import type { Server } from "socket.io";
 
 export type NotificationType =
   | "SYSTEM"
@@ -38545,8 +38864,13 @@ interface EmitNotificationParams {
   message:   string;
   type:      NotificationType;
   link?:     string;
-  // ✅ 수정: Record<string, unknown> → Prisma.InputJsonValue (빌드 타입 오류 해결)
+  // ✅ Record<string, unknown> → Prisma.InputJsonValue (빌드 타입 오류 해결)
   metadata?: Prisma.InputJsonValue;
+}
+
+// ✅ [품질] (global as any).io → 타입 안전한 헬퍼로 교체
+function getIO(): Server | null {
+  return (global as { io?: Server }).io ?? null;
 }
 
 // ─── 단건 알림 생성 ───────────────────────────────────────
@@ -38567,7 +38891,8 @@ export async function emitNotification(
       },
     });
 
-    const io = (global as any).io;
+    // ✅ DB 저장 후 실시간 소켓 전송
+    const io = getIO();
     if (io) {
       io.to(`user:${userId}`).emit("notification:new", notification);
     }
@@ -38600,7 +38925,8 @@ export async function emitNotificationToMany(
       skipDuplicates: true,
     });
 
-    const io = (global as any).io;
+    // ✅ DB 저장 후 전체 유저에게 실시간 소켓 전송
+    const io = getIO();
     if (io) {
       userIds.forEach((userId) => {
         io.to(`user:${userId}`).emit("notification:new", {
@@ -38685,190 +39011,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
       </ThemeProvider>
     </SessionProvider>
   );
-}
-</file>
-
-<file path="src/app/api/chat/rooms/route.ts">
-// src/app/api/chat/rooms/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/db";
-
-// ─── GET /api/chat/rooms — 채팅방 목록 조회 ──────────────
-export async function GET(request: NextRequest) {
-  const apiStart = Date.now();
-
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
-    }
-
-    const chatRoomMembers = await prisma.chatRoomMember.findMany({
-      where: { userId: session.user.id },
-      include: {
-        chatRoom: {
-          include: {
-            members: {
-              include: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
-                    email: true,
-                    isOnline: true,
-                    lastSeenAt: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      orderBy: { chatRoom: { updatedAt: "desc" } },
-    });
-
-    const roomIds = chatRoomMembers.map((m) => m.chatRoomId);
-
-    if (!roomIds.length) {
-      return NextResponse.json({ chatRooms: [] });
-    }
-
-    const allMessages = await prisma.chatMessage.findMany({
-      where: { chatRoomId: { in: roomIds } },
-      orderBy: { createdAt: "desc" },
-      include: {
-        sender: { select: { id: true, name: true } },
-      },
-    });
-
-    const lastMessageMap = new Map<string, any>();
-    const unreadMap: Record<string, number> = {};
-
-    for (const msg of allMessages) {
-      if (!lastMessageMap.has(msg.chatRoomId)) {
-        lastMessageMap.set(msg.chatRoomId, msg);
-      }
-      if (msg.senderId !== session.user.id) {
-        unreadMap[msg.chatRoomId] = (unreadMap[msg.chatRoomId] || 0) + 1;
-      }
-    }
-
-    const chatRooms = chatRoomMembers.map((member: any) => ({
-      ...member.chatRoom,
-      messages: lastMessageMap.has(member.chatRoomId)
-        ? [lastMessageMap.get(member.chatRoomId)]
-        : [],
-      unreadCount: unreadMap[member.chatRoomId] || 0,
-      myMembership: { lastReadAt: member.lastReadAt },
-    }));
-
-    console.log("GET /api/chat/rooms:", Date.now() - apiStart, "ms");
-
-    return NextResponse.json({ chatRooms });
-  } catch (error) {
-    console.error("Chat rooms fetch error:", error);
-    return NextResponse.json(
-      { error: "채팅방 조회 중 오류가 발생했습니다" },
-      { status: 500 }
-    );
-  }
-}
-
-// ─── POST /api/chat/rooms — 채팅방 생성 ─────────────────
-// ✅ 추가: 이 핸들러가 없어서 405 Method Not Allowed 발생
-export async function POST(request: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
-    }
-
-    const body = await request.json();
-    const { participantId, name, type = "DIRECT" } = body;
-
-    if (!participantId) {
-      return NextResponse.json(
-        { error: "대화 상대를 선택해주세요" },
-        { status: 400 }
-      );
-    }
-
-    // 자기 자신과의 채팅 방지
-    if (participantId === session.user.id) {
-      return NextResponse.json(
-        { error: "자기 자신과는 채팅할 수 없습니다" },
-        { status: 400 }
-      );
-    }
-
-    // 상대방 존재 확인
-    const participant = await prisma.user.findUnique({
-      where: { id: participantId },
-      select: { id: true, name: true },
-    });
-
-    if (!participant) {
-      return NextResponse.json(
-        { error: "존재하지 않는 사용자입니다" },
-        { status: 404 }
-      );
-    }
-
-    // DIRECT 채팅: 이미 존재하는 1:1 채팅방 재사용
-    if (type === "DIRECT") {
-      const existing = await prisma.chatRoom.findFirst({
-        where: {
-          type: "DIRECT",
-          AND: [
-            { members: { some: { userId: session.user.id } } },
-            { members: { some: { userId: participantId } } },
-          ],
-        },
-        include: {
-          members: {
-            include: {
-              user: { select: { id: true, name: true, isOnline: true } },
-            },
-          },
-        },
-      });
-
-      if (existing) {
-        return NextResponse.json({ chatRoom: existing, isExisting: true });
-      }
-    }
-
-    // 채팅방 + 멤버 동시 생성
-    const chatRoom = await prisma.chatRoom.create({
-      data: {
-        type: type === "GROUP" ? "GROUP" : "DIRECT",
-        name: name ?? null,
-        members: {
-          create: [
-            { userId: session.user.id },
-            { userId: participantId },
-          ],
-        },
-      },
-      include: {
-        members: {
-          include: {
-            user: { select: { id: true, name: true, isOnline: true } },
-          },
-        },
-      },
-    });
-
-    return NextResponse.json({ chatRoom, isExisting: false }, { status: 201 });
-  } catch (error) {
-    console.error("Chat room create error:", error);
-    return NextResponse.json(
-      { error: "채팅방 생성에 실패했습니다" },
-      { status: 500 }
-    );
-  }
 }
 </file>
 
@@ -39424,6 +39566,190 @@ ENV HOSTNAME=0.0.0.0
 
 # ✅ tsx 불필요 — 순수 node로 실행
 CMD ["node", "server.js"]
+</file>
+
+<file path="src/app/api/chat/rooms/route.ts">
+// src/app/api/chat/rooms/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+
+// ─── GET /api/chat/rooms — 채팅방 목록 조회 ──────────────
+export async function GET(request: NextRequest) {
+  const apiStart = Date.now();
+
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
+    }
+
+    const chatRoomMembers = await prisma.chatRoomMember.findMany({
+      where: { userId: session.user.id },
+      include: {
+        chatRoom: {
+          include: {
+            members: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    isOnline: true,
+                    lastSeenAt: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { chatRoom: { updatedAt: "desc" } },
+    });
+
+    const roomIds = chatRoomMembers.map((m) => m.chatRoomId);
+
+    if (!roomIds.length) {
+      return NextResponse.json({ chatRooms: [] });
+    }
+
+    const allMessages = await prisma.chatMessage.findMany({
+      where: { chatRoomId: { in: roomIds } },
+      orderBy: { createdAt: "desc" },
+      include: {
+        sender: { select: { id: true, name: true } },
+      },
+    });
+
+    const lastMessageMap = new Map<string, any>();
+    const unreadMap: Record<string, number> = {};
+
+    for (const msg of allMessages) {
+      if (!lastMessageMap.has(msg.chatRoomId)) {
+        lastMessageMap.set(msg.chatRoomId, msg);
+      }
+      if (msg.senderId !== session.user.id) {
+        unreadMap[msg.chatRoomId] = (unreadMap[msg.chatRoomId] || 0) + 1;
+      }
+    }
+
+    const chatRooms = chatRoomMembers.map((member: any) => ({
+      ...member.chatRoom,
+      messages: lastMessageMap.has(member.chatRoomId)
+        ? [lastMessageMap.get(member.chatRoomId)]
+        : [],
+      unreadCount: unreadMap[member.chatRoomId] || 0,
+      myMembership: { lastReadAt: member.lastReadAt },
+    }));
+
+    console.log("GET /api/chat/rooms:", Date.now() - apiStart, "ms");
+
+    return NextResponse.json({ chatRooms });
+  } catch (error) {
+    console.error("Chat rooms fetch error:", error);
+    return NextResponse.json(
+      { error: "채팅방 조회 중 오류가 발생했습니다" },
+      { status: 500 }
+    );
+  }
+}
+
+// ─── POST /api/chat/rooms — 채팅방 생성 ─────────────────
+// ✅ 추가: 이 핸들러가 없어서 405 Method Not Allowed 발생
+export async function POST(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { participantId, name, type = "DIRECT" } = body;
+
+    if (!participantId) {
+      return NextResponse.json(
+        { error: "대화 상대를 선택해주세요" },
+        { status: 400 }
+      );
+    }
+
+    // 자기 자신과의 채팅 방지
+    if (participantId === session.user.id) {
+      return NextResponse.json(
+        { error: "자기 자신과는 채팅할 수 없습니다" },
+        { status: 400 }
+      );
+    }
+
+    // 상대방 존재 확인
+    const participant = await prisma.user.findUnique({
+      where: { id: participantId },
+      select: { id: true, name: true },
+    });
+
+    if (!participant) {
+      return NextResponse.json(
+        { error: "존재하지 않는 사용자입니다" },
+        { status: 404 }
+      );
+    }
+
+    // DIRECT 채팅: 이미 존재하는 1:1 채팅방 재사용
+    if (type === "DIRECT") {
+      const existing = await prisma.chatRoom.findFirst({
+        where: {
+          type: "DIRECT",
+          AND: [
+            { members: { some: { userId: session.user.id } } },
+            { members: { some: { userId: participantId } } },
+          ],
+        },
+        include: {
+          members: {
+            include: {
+              user: { select: { id: true, name: true, isOnline: true } },
+            },
+          },
+        },
+      });
+
+      if (existing) {
+        return NextResponse.json({ chatRoom: existing, isExisting: true });
+      }
+    }
+
+    // 채팅방 + 멤버 동시 생성
+    const chatRoom = await prisma.chatRoom.create({
+      data: {
+        type: type === "GROUP" ? "GROUP" : "DIRECT",
+        name: name ?? null,
+        members: {
+          create: [
+            { userId: session.user.id },
+            { userId: participantId },
+          ],
+        },
+      },
+      include: {
+        members: {
+          include: {
+            user: { select: { id: true, name: true, isOnline: true } },
+          },
+        },
+      },
+    });
+
+    return NextResponse.json({ chatRoom, isExisting: false }, { status: 201 });
+  } catch (error) {
+    console.error("Chat room create error:", error);
+    return NextResponse.json(
+      { error: "채팅방 생성에 실패했습니다" },
+      { status: 500 }
+    );
+  }
+}
 </file>
 
 <file path="src/lib/socket-server.ts">

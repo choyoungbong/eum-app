@@ -1,14 +1,15 @@
-// src/app/api/files/[id]/route.ts (DELETE 메서드 교체)
-// 기존 DELETE를 soft delete로 변경
-
+// src/app/api/files/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/db";
 import { unlink } from "fs/promises";
 import { existsSync } from "fs";
+import { join, basename } from "path";
 
-// PATCH — 파일 메타 수정 (기존 유지)
+const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
+
+// GET — 파일 메타 조회
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -25,7 +26,7 @@ export async function GET(
   return NextResponse.json(file);
 }
 
-// DELETE — 휴지통으로 이동 (soft delete)
+// DELETE — 휴지통으로 이동 (soft delete) / 영구 삭제
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -41,13 +42,27 @@ export async function DELETE(
 
     // 이미 삭제된 파일이면 영구 삭제
     if (file.deletedAt) {
-      if (existsSync(file.filepath)) await unlink(file.filepath);
-      if (file.thumbnailUrl && existsSync(file.thumbnailUrl)) await unlink(file.thumbnailUrl);
+      // ✅ [품질-3] 물리 파일 삭제
+      if (existsSync(file.filepath)) {
+        await unlink(file.filepath);
+      }
+
+      // ✅ [품질-3] 썸네일 삭제 버그 수정
+      // 기존: file.thumbnailUrl("/api/files/thumbnail/thumb_xxx.jpg")을 파일 경로로 직접 사용 → 삭제 안 됨
+      // 개선: URL에서 파일명만 추출 후 실제 스토리지 경로로 변환
+      if (file.thumbnailUrl) {
+        const thumbFilename = basename(file.thumbnailUrl); // "thumb_xxx.jpg"
+        const thumbPath = join(STORAGE_PATH, "thumbnails", thumbFilename);
+        if (existsSync(thumbPath)) {
+          await unlink(thumbPath);
+        }
+      }
+
       await prisma.file.delete({ where: { id: params.id } });
       return NextResponse.json({ message: "파일이 영구 삭제되었습니다", permanent: true });
     }
 
-    // 처음 삭제: 휴지통으로 이동
+    // 처음 삭제: 휴지통으로 이동 (물리 파일은 유지)
     await prisma.file.update({
       where: { id: params.id },
       data: { deletedAt: new Date() },

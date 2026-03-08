@@ -14,7 +14,7 @@ export const getMediaStream = async (video: boolean = true): Promise<MediaStream
   try {
     return await navigator.mediaDevices.getUserMedia({
       video: video ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-      // ✅ 수정: audio 제약조건 명시 — echo/noise 캔슬링, mono 채널로 안정성 확보
+      // ✅ audio 제약조건 명시 — echo/noise 캔슬링, mono 채널로 안정성 확보
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
@@ -36,6 +36,7 @@ export const getMediaStream = async (video: boolean = true): Promise<MediaStream
 //   2. srcObject 매번 재할당으로 연결 누락 방지
 //   3. play() promise 처리로 autoplay 차단 대응
 //   4. audio track을 video보다 먼저 addTrack (SDP 협상 우선순위)
+//   5. [기능-2] ICE Candidate 버퍼링 — setRemoteDescription 전까지 큐에 보관
 // ─────────────────────────────────────────────────────────────
 export interface WebRTCConfig {
   iceServers?: RTCIceServer[];
@@ -51,6 +52,10 @@ export class WebRTCManager {
   private remoteAudioEl: HTMLAudioElement | null = null;
   private config: WebRTCConfig;
 
+  // ✅ [기능-2] ICE Candidate 버퍼: setRemoteDescription 전에 도착한 candidate 보관
+  private pendingCandidates: RTCIceCandidateInit[] = [];
+  private hasRemoteDescription = false;
+
   constructor(config: WebRTCConfig = {}) {
     this.config = config;
   }
@@ -61,24 +66,28 @@ export class WebRTCManager {
       this.pc.close();
     }
 
+    // ✅ [기능-2] PeerConnection 재생성 시 버퍼 초기화
+    this.pendingCandidates = [];
+    this.hasRemoteDescription = false;
+
     this.pc = new RTCPeerConnection(
       this.config.iceServers
         ? { iceServers: this.config.iceServers }
-        : ICE_SERVERS  // ✅ 기존 ICE_SERVERS 재사용
+        : ICE_SERVERS
     );
 
-    // ✅ 핵심 수정 1: ontrack에서 audio/video 구분 처리
+    // ✅ ontrack에서 audio/video 구분 처리
     this.pc.ontrack = (event) => {
       const [remoteStream] = event.streams;
       if (!remoteStream) return;
 
-      // ✅ 핵심 수정 2: stream 교체 시마다 콜백 + audio element 재설정
+      // stream 교체 시마다 콜백 + audio element 재설정
       if (this.remoteStream?.id !== remoteStream.id) {
         this.remoteStream = remoteStream;
         this.config.onRemoteStream?.(remoteStream);
       }
 
-      // ✅ 핵심 수정 3: audio track은 전용 element에 직접 attach
+      // audio track은 전용 element에 직접 attach
       if (event.track.kind === "audio") {
         this.attachRemoteAudio(remoteStream);
       }
@@ -98,13 +107,12 @@ export class WebRTCManager {
     return this.pc;
   }
 
-  // ✅ 핵심 수정 4: 전용 <audio> element 생성 및 srcObject 재할당
+  // ✅ 전용 <audio> element 생성 및 srcObject 재할당
   private attachRemoteAudio(stream: MediaStream) {
     try {
       if (!this.remoteAudioEl) {
         this.remoteAudioEl = document.createElement("audio");
         this.remoteAudioEl.autoplay = true;
-        // ✅ 수정: playsInline은 HTMLVideoElement 전용 — HTMLAudioElement에 없음
         this.remoteAudioEl.style.display = "none";
         document.body.appendChild(this.remoteAudioEl);
       }
@@ -112,7 +120,7 @@ export class WebRTCManager {
       // 동일 stream이라도 srcObject 재할당 (연결 누락 방지)
       this.remoteAudioEl.srcObject = stream;
 
-      // ✅ 핵심 수정 5: play() promise 처리 — autoplay 차단 시 재시도
+      // play() promise 처리 — autoplay 차단 시 재시도
       const playPromise = this.remoteAudioEl.play();
       if (playPromise !== undefined) {
         playPromise.catch(() => {
@@ -144,7 +152,7 @@ export class WebRTCManager {
     const src = stream ?? this.localStream;
     if (!src || !this.pc) return;
 
-    // ✅ 핵심 수정 6: audio 먼저 추가 (SDP 협상 우선순위 확보)
+    // audio 먼저 추가 (SDP 협상 우선순위 확보)
     src.getAudioTracks().forEach((track) => {
       this.pc!.addTrack(track, src);
     });
@@ -171,13 +179,37 @@ export class WebRTCManager {
     return answer;
   }
 
+  // ✅ [기능-2] setRemoteDescription 후 버퍼에 쌓인 candidate 일괄 처리
   async setRemoteDescription(sdp: RTCSessionDescriptionInit) {
     if (!this.pc) throw new Error("PeerConnection이 초기화되지 않았습니다");
     await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    this.hasRemoteDescription = true;
+
+    // 버퍼에 쌓인 ICE candidate 일괄 적용
+    if (this.pendingCandidates.length > 0) {
+      console.debug(`[WebRTC] Flushing ${this.pendingCandidates.length} buffered ICE candidates`);
+      for (const candidate of this.pendingCandidates) {
+        try {
+          await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.warn("[WebRTC] Failed to apply buffered ICE candidate:", err);
+        }
+      }
+      this.pendingCandidates = [];
+    }
   }
 
+  // ✅ [기능-2] remoteDescription 미설정 시 candidate를 버퍼에 보관
   async addIceCandidate(candidate: RTCIceCandidateInit) {
     if (!this.pc) throw new Error("PeerConnection이 초기화되지 않았습니다");
+
+    if (!this.hasRemoteDescription) {
+      // remoteDescription이 아직 없으면 버퍼에 저장
+      console.debug("[WebRTC] Buffering ICE candidate (remoteDescription not set yet)");
+      this.pendingCandidates.push(candidate);
+      return;
+    }
+
     try {
       await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
     } catch {
@@ -208,6 +240,10 @@ export class WebRTCManager {
     this.pc?.close();
     this.pc = null;
     this.remoteStream = null;
+
+    // ✅ [기능-2] 정리 시 버퍼도 초기화
+    this.pendingCandidates = [];
+    this.hasRemoteDescription = false;
   }
 
   // ─── Getters ────────────────────────────────────────────

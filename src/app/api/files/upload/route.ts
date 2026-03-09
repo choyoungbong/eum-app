@@ -1,35 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth"; // ✅ [수정] route → lib/auth
 import { prisma } from "@/lib/db";
 import { writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import crypto from "crypto";
 import sharp from "sharp";
-import { fileTypeFromBuffer } from "file-type"; // ✅ [보안-2] magic bytes 검증용 (npm install file-type)
+import { fileTypeFromBuffer } from "file-type";
 
 const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
-const MAX_FILE_SIZE = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE || "52428800"); // 50MB
+const MAX_FILE_SIZE = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE || "52428800");
 
-// ✅ [보안-2] 허용 MIME 타입 화이트리스트
 const ALLOWED_MIME_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-  "video/mp4",
-  "video/webm",
-  "application/zip",
-  "text/plain",
+  "image/jpeg", "image/png", "image/gif", "image/webp",
+  "application/pdf", "video/mp4", "video/webm",
+  "application/zip", "text/plain",
 ]);
 
-// ✅ [보안-4] Rate Limiting: 유저별 업로드 횟수 인메모리 추적
-// 프로덕션에서는 Redis 기반 rate-limit 라이브러리로 교체 권장
 const uploadRateMap = new Map<string, { count: number; resetAt: number }>();
-const RATE_LIMIT = 10;        // 최대 횟수
-const RATE_WINDOW_MS = 60_000; // 1분
+const RATE_LIMIT = 10;
+const RATE_WINDOW_MS = 60_000;
 
 function checkRateLimit(userId: string): { allowed: boolean; retryAfter?: number } {
   const now = Date.now();
@@ -50,21 +41,16 @@ function checkRateLimit(userId: string): { allowed: boolean; retryAfter?: number
 
 export async function POST(request: NextRequest) {
   try {
-    // 1. 세션 확인
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
-    // ✅ [보안-4] Rate Limiting 체크
     const rateResult = checkRateLimit(session.user.id);
     if (!rateResult.allowed) {
       return NextResponse.json(
         { error: "잠시 후 다시 시도해주세요. 업로드 한도에 도달했습니다." },
-        {
-          status: 429,
-          headers: { "Retry-After": String(rateResult.retryAfter ?? 60) },
-        }
+        { status: 429, headers: { "Retry-After": String(rateResult.retryAfter ?? 60) } }
       );
     }
 
@@ -72,7 +58,6 @@ export async function POST(request: NextRequest) {
     const file = formData.get("file") as File;
     const folderId = formData.get("folderId") as string | null;
 
-    // 2. 파일 유효성 검사
     if (!file) {
       return NextResponse.json({ error: "파일을 선택해주세요" }, { status: 400 });
     }
@@ -84,14 +69,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 3. 파일 버퍼 읽기
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // ✅ [보안-2] magic bytes로 실제 MIME 타입 검증 (브라우저 제공값 신뢰 안 함)
+    // ✅ [보안-2] magic bytes로 실제 MIME 타입 검증
     const detectedType = await fileTypeFromBuffer(buffer);
-
-    // text/plain 은 magic bytes가 없으므로 브라우저 타입으로 fallback
     const actualMimeType = detectedType?.mime ?? (file.type === "text/plain" ? "text/plain" : null);
 
     if (!actualMimeType || !ALLOWED_MIME_TYPES.has(actualMimeType)) {
@@ -105,14 +87,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4. 파일 해시 생성 (중복 체크용)
     const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
 
-    /**
-     * 5. 시스템 전체 중복 확인 (Hash 기반)
-     * DB의 hash 필드에 @unique 제약조건이 있으므로,
-     * 다른 유저가 올린 파일이라도 해시가 같으면 create 시 에러가 발생합니다.
-     */
     const existingFile = await prisma.file.findFirst({
       where: { hash: fileHash },
     });
@@ -130,7 +106,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6. 고유 파일명 및 경로 설정
     const fileExtension = file.name.split(".").pop() || "bin";
     const uniqueFilename = `${crypto.randomUUID()}.${fileExtension}`;
 
@@ -140,11 +115,9 @@ export async function POST(request: NextRequest) {
     if (!existsSync(uploadDir)) await mkdir(uploadDir, { recursive: true });
     if (!existsSync(thumbnailDir)) await mkdir(thumbnailDir, { recursive: true });
 
-    // 7. 물리 파일 저장
     const filepath = join(uploadDir, uniqueFilename);
     await writeFile(filepath, buffer);
 
-    // 8. 썸네일 생성 (이미지인 경우만, 검증된 MIME 타입 사용)
     let thumbnailUrl: string | null = null;
     if (actualMimeType.startsWith("image/")) {
       try {
@@ -159,15 +132,9 @@ export async function POST(request: NextRequest) {
         thumbnailUrl = `/api/files/thumbnail/${thumbnailFilename}`;
       } catch (err) {
         console.error("Thumbnail generation failed:", err);
-        // 썸네일 실패는 파일 업로드 자체를 중단시키지 않음
       }
     }
 
-    /**
-     * 9. DB 저장 및 최종 중복 에러 핸들링
-     * findFirst 이후 create 직전에 다른 요청이 들어올 경우를 대비해
-     * Prisma의 P2002(Unique 제약 위반) 에러를 Catch합니다.
-     */
     try {
       const savedFile = await prisma.file.create({
         data: {
@@ -175,7 +142,7 @@ export async function POST(request: NextRequest) {
           originalName: file.name,
           filepath: filepath,
           size: BigInt(file.size),
-          mimeType: actualMimeType, // ✅ 검증된 실제 MIME 타입으로 저장
+          mimeType: actualMimeType,
           hash: fileHash,
           thumbnailUrl,
           userId: session.user.id,

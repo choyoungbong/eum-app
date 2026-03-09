@@ -38,7 +38,9 @@
       "coverage/**",
       "storage/**",
       "logs/**",
-      ".git/**"
+      ".git/**",
+      "repomix-output.xml",
+      "repomix-output*.xml"
     ]
   }
 }

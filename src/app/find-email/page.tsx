@@ -1,6 +1,5 @@
 // =============================================
 // 파일 1: src/app/find-email/page.tsx
-// 이메일(아이디) 찾기 페이지
 // =============================================
 "use client";
 
@@ -26,9 +25,15 @@ export default function FindEmailPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        setResult(data);
+        // ✅ [수정] 보안상 API는 항상 200 반환 → maskedEmail === null로 미존재 계정 판별
+        // 기존: res.ok만 체크 → maskedEmail이 null이어도 result에 세팅되어 빈 화면 표시
+        if (data.maskedEmail === null) {
+          setError("일치하는 계정을 찾을 수 없습니다");
+        } else {
+          setResult(data);
+        }
       } else {
-        setError(data.error || "이메일을 찾을 수 없습니다");
+        setError(data.error || "오류가 발생했습니다");
       }
     } catch {
       setError("오류가 발생했습니다");

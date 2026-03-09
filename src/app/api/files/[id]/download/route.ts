@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth"; // ✅ [수정] route → lib/auth
 import { prisma } from "@/lib/db";
-import { createReadStream } from "fs"; // ✅ [품질-2] 이제 실제로 사용
+import { createReadStream } from "fs";
 import { stat } from "fs/promises";
 
 export async function GET(
@@ -20,7 +20,6 @@ export async function GET(
 
     const fileId = params.id;
 
-    // 파일 조회
     const file = await prisma.file.findUnique({
       where: { id: fileId },
     });
@@ -62,11 +61,8 @@ export async function GET(
       );
     }
 
-    // ✅ [성능-2] 전체 메모리 로드(Buffer.concat) → ReadableStream 스트리밍으로 교체
-    // 기존: 파일 전체를 chunks 배열로 메모리에 올린 후 응답 → 대용량 파일 시 OOM 위험
-    // 개선: Node.js ReadableStream을 Web ReadableStream으로 래핑하여 청크 단위로 전송
+    // ✅ [성능-2] ReadableStream 스트리밍 — 대용량 파일 OOM 방지
     const nodeStream = createReadStream(file.filepath);
-
     const webStream = new ReadableStream({
       start(controller) {
         nodeStream.on("data", (chunk) => {
@@ -80,7 +76,6 @@ export async function GET(
         });
       },
       cancel() {
-        // 클라이언트가 다운로드를 취소한 경우 스트림 정리
         nodeStream.destroy();
       },
     });
@@ -90,9 +85,7 @@ export async function GET(
       headers: {
         "Content-Type": file.mimeType,
         "Content-Disposition": `attachment; filename="${encodeURIComponent(file.originalName)}"`,
-        // ✅ BigInt → Number 변환 (Content-Length는 문자열 숫자여야 함)
         "Content-Length": file.size.toString(),
-        // ✅ 스트리밍 다운로드 진행률 표시를 위해 Accept-Ranges 허용
         "Accept-Ranges": "bytes",
       },
     });

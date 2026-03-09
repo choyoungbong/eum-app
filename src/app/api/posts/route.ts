@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth"; // ✅ [수정] route → lib/auth
 import { prisma } from "@/lib/db";
 import { z } from "zod";
 
@@ -101,8 +101,6 @@ export async function GET(request: NextRequest) {
     ]);
 
     // ✅ [성능-1] N+1 쿼리 → 단일 IN 쿼리로 최적화
-    // 기존: posts.map(async post => prisma.sharedResource.findFirst(...)) → 게시글 수만큼 쿼리 발생
-    // 개선: 조회된 게시글 ID 전체를 한 번에 조회 → Map으로 O(1) 탐색
     const postIds = posts.map((p) => p.id);
 
     const shareInfoList = await prisma.sharedResource.findMany({
@@ -122,7 +120,6 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // resourceId → shareInfo Map 구성
     const shareMap = new Map(shareInfoList.map((s) => [s.resourceId, s]));
 
     // 3. 공유 정보 병합 (추가 쿼리 없음)

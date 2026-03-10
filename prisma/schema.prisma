@@ -115,7 +115,6 @@ model User {
 
   isOnline      Boolean     @default(false) @map("is_online")
   lastSeenAt    DateTime?   @map("last_seen_at")
-  fcmToken      String?     @map("fcm_token")
   notificationPrefs Json?   @map("notification_prefs")
   twoFactorEnabled  Boolean @default(false) @map("two_factor_enabled")
   twoFactorSecret   String? @map("two_factor_secret")
@@ -156,7 +155,8 @@ model User {
   sessions             UserSession[]
   apiKeys              ApiKey[]
   fileVersions         FileVersion[]
-
+  fcmTokens            UserFcmToken[]
+  
   @@map("users")
 }
 
@@ -579,4 +579,19 @@ model SystemNotice {
 
   @@index([isActive])
   @@map("system_notices")
+}
+
+model UserFcmToken {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  deviceId  String?  @map("device_id")   // 기기 식별자 (선택)
+  userAgent String?  @map("user_agent")  // 브라우저/앱 정보 (선택)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_fcm_tokens")
 }

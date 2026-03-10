@@ -1,5 +1,5 @@
 "use client";
-// src/app/search/page.tsx — EUM 브랜딩 고도화 + 모바일 버튼 overflow 수정
+// src/app/search/page.tsx — 페이지네이션 추가
 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
@@ -13,7 +13,14 @@ import {
   Tag as TagIcon, Calendar, LayoutGrid, AlignLeft,
 } from "lucide-react";
 
-interface SearchResult { files: any[]; posts: any[]; total: number; }
+interface Pagination {
+  filesTotalCount: number;
+  postsTotalCount: number;
+  hasNextPage: boolean;
+  page: number;
+  limit: number;
+}
+interface SearchResult { files: any[]; posts: any[]; total: number; pagination?: Pagination; }
 interface SavedSearch { id: string; name: string; query: string; filters: string; createdAt: string; }
 interface Tag { id: string; name: string; }
 
@@ -26,6 +33,8 @@ export default function SearchPage() {
   const [results, setResults] = useState<SearchResult>({ files: [], posts: [], total: 0 });
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
 
   const [showFilters, setShowFilters] = useState(false);
   const [filterType, setFilterType] = useState<"ALL" | "FILE" | "POST">("ALL");
@@ -67,7 +76,7 @@ export default function SearchPage() {
     filterTagIds.length > 0, filterDateFrom !== "", filterDateTo !== "",
   ].filter(Boolean).length;
 
-  const handleSearch = async (overrideQuery?: string) => {
+  const handleSearch = async (overrideQuery?: string, pageNum: number = 1) => {
     const q = overrideQuery ?? query;
     if (!q.trim() && filterTagIds.length === 0) {
       toast.warning("검색어 또는 태그를 선택하세요");
@@ -75,6 +84,7 @@ export default function SearchPage() {
     }
     setLoading(true);
     setHasSearched(true);
+    setPage(pageNum);
     try {
       const params = new URLSearchParams();
       if (q.trim()) params.set("q", q.trim());
@@ -83,15 +93,21 @@ export default function SearchPage() {
       if (filterTagIds.length > 0) params.set("tags", filterTagIds.join(","));
       if (filterDateFrom) params.set("dateFrom", filterDateFrom);
       if (filterDateTo) params.set("dateTo", filterDateTo);
+      params.set("page", String(pageNum));
       const res = await fetch(`/api/search?${params}`);
-      if (res.ok) setResults(await res.json());
-      else toast.error("검색 중 오류가 발생했습니다");
+      if (res.ok) {
+        const data = await res.json();
+        setResults(data);
+        setPagination(data.pagination ?? null);
+      } else toast.error("검색 중 오류가 발생했습니다");
     } catch { toast.error("검색 중 오류가 발생했습니다"); }
     finally { setLoading(false); }
   };
 
   const handleResetFilters = () => {
-    setFilterType("ALL"); setFilterMimeType(""); setFilterTagIds([]); setFilterDateFrom(""); setFilterDateTo("");
+    setFilterType("ALL"); setFilterMimeType(""); setFilterTagIds([]);
+    setFilterDateFrom(""); setFilterDateTo("");
+    setPage(1); setPagination(null);
   };
 
   const handleToggleTag = (tagId: string) =>
@@ -168,7 +184,6 @@ export default function SearchPage() {
         {/* 검색 카드 */}
         <div className="bg-white/3 border border-white/6 rounded-2xl p-4 mb-4">
 
-          {/* ✅ 모바일 overflow 수정: flex-1 min-w-0 on wrapper + shrink-0 on button */}
           <div className="flex gap-2 mb-3">
             <div className="flex-1 min-w-0 relative">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
@@ -292,7 +307,6 @@ export default function SearchPage() {
                 <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
                   <Calendar size={11} /> 업로드 날짜
                 </p>
-                {/* ✅ 날짜 input도 min-w-0 처리 */}
                 <div className="flex items-center gap-2">
                   <input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)}
                     className="flex-1 min-w-0 px-3 py-1.5 bg-zinc-900 border border-zinc-700 focus:border-violet-500 rounded-lg text-xs text-zinc-300 outline-none transition-colors" />
@@ -424,6 +438,34 @@ export default function SearchPage() {
                         </Link>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {/* 페이지네이션 */}
+                {pagination && (pagination.page > 1 || pagination.hasNextPage) && (
+                  <div className="flex items-center justify-between mt-6 pt-4 border-t border-white/6">
+                    <button
+                      onClick={() => handleSearch(query, page - 1)}
+                      disabled={page <= 1 || loading}
+                      className="flex items-center gap-1.5 px-4 py-2 text-xs rounded-xl border border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                    >
+                      <ChevronLeft size={13} /> 이전
+                    </button>
+                    <span className="text-xs text-zinc-600">
+                      {page} 페이지
+                      {(pagination.filesTotalCount + pagination.postsTotalCount) > 0 && (
+                        <span className="ml-1 text-zinc-700">
+                          · 전체 {pagination.filesTotalCount + pagination.postsTotalCount}개
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      onClick={() => handleSearch(query, page + 1)}
+                      disabled={!pagination.hasNextPage || loading}
+                      className="flex items-center gap-1.5 px-4 py-2 text-xs rounded-xl border border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                    >
+                      다음 <ChevronLeft size={13} className="rotate-180" />
+                    </button>
                   </div>
                 )}
               </>

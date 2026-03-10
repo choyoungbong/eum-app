@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
       try {
         // 수정된 fcm.ts의 sendCallNotification 호출
         const pushResult = await sendCallNotification(
-          receiver.fcmToken,
+          receiverId,
           session.user.name || "사용자",
           callType,
           call.id,

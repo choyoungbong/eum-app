@@ -14,37 +14,40 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const q = searchParams.get("q") || "";
-    const type = searchParams.get("type") || "ALL";       // ALL | FILE | POST
-    const mimeType = searchParams.get("mimeType") || "";   // image | video | pdf | document | zip
-    const tagsParam = searchParams.get("tags") || "";       // "tagId1,tagId2"
+    const type = searchParams.get("type") || "ALL";
+    const mimeType = searchParams.get("mimeType") || "";
+    const tagsParam = searchParams.get("tags") || "";
     const dateFrom = searchParams.get("dateFrom") || "";
     const dateTo = searchParams.get("dateTo") || "";
 
     const tagIds = tagsParam ? tagsParam.split(",").filter(Boolean) : [];
 
-    let files: any[] = [];
-    let posts: any[] = [];
+    // ✅ [성능] 파일/게시글 모두 필요한 경우 sharedPostIds를 먼저 1회만 조회
+    const needsPost = type === "ALL" || type === "POST";
+    const needsFile = type === "ALL" || type === "FILE";
 
-    // ===== 파일 검색 =====
-    if (type === "ALL" || type === "FILE") {
-      const fileWhere: any = {
-        userId: session.user.id,
-      };
+    const sharedPostIds = needsPost
+      ? await prisma.sharedResource.findMany({
+          where: { resourceType: "POST", sharedWithId: session.user.id },
+          select: { resourceId: true },
+        }).then((rows) => rows.map((r) => r.resourceId))
+      : [];
 
-      // 키워드
+    // ===== where 조건 구성 (쿼리 실행 전) =====
+
+    // 파일 where
+    const fileWhere: any = needsFile ? { userId: session.user.id } : null;
+
+    if (fileWhere) {
       if (q.trim()) {
-        fileWhere.originalName = {
-          contains: q.trim(),
-          mode: "insensitive",
-        };
+        fileWhere.originalName = { contains: q.trim(), mode: "insensitive" };
       }
 
-      // MIME 타입 필터
       if (mimeType) {
         const mimeMap: Record<string, any> = {
-          image: { startsWith: "image/" },
-          video: { startsWith: "video/" },
-          pdf: { equals: "application/pdf" },
+          image:    { startsWith: "image/" },
+          video:    { startsWith: "video/" },
+          pdf:      { equals: "application/pdf" },
           document: {
             in: [
               "application/msword",
@@ -56,21 +59,11 @@ export async function GET(request: NextRequest) {
               "text/plain",
             ],
           },
-          zip: {
-            in: [
-              "application/zip",
-              "application/x-rar-compressed",
-              "application/x-7z-compressed",
-            ],
-          },
+          zip: { in: ["application/zip", "application/x-rar-compressed", "application/x-7z-compressed"] },
         };
-
-        if (mimeMap[mimeType]) {
-          fileWhere.mimeType = mimeMap[mimeType];
-        }
+        if (mimeMap[mimeType]) fileWhere.mimeType = mimeMap[mimeType];
       }
 
-      // 날짜 필터
       if (dateFrom || dateTo) {
         fileWhere.createdAt = {};
         if (dateFrom) fileWhere.createdAt.gte = new Date(dateFrom);
@@ -81,68 +74,34 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      // 태그 필터
       if (tagIds.length > 0) {
-        fileWhere.fileTags = {
-          some: {
-            tagId: { in: tagIds },
-          },
-        };
+        fileWhere.fileTags = { some: { tagId: { in: tagIds } } };
       }
-
-      files = await prisma.file.findMany({
-        where: fileWhere,
-        include: {
-          fileTags: {
-            include: { tag: true },
-          },
-        },
-        orderBy: { createdAt: "desc" },
-        take: 50,
-      });
-
-      // BigInt 직렬화
-      files = files.map(file => ({
-        ...file,
-        size: file.size.toString(),
-      }));
     }
 
-    // ===== 게시글 검색 =====
-    if (type === "ALL" || type === "POST") {
-      // 먼저 공유받은 게시글 ID 목록 조회
-      const sharedPostIds = await prisma.sharedResource.findMany({
-        where: {
-          resourceType: "POST",
-          sharedWithId: session.user.id,
-        },
-        select: { resourceId: true },
-      });
+    // 게시글 where
+    const postWhere: any = needsPost
+      ? {
+          OR: [
+            { userId: session.user.id },
+            { visibility: "PUBLIC" },
+            { visibility: "SHARED", id: { in: sharedPostIds } },
+          ],
+        }
+      : null;
 
-      const postWhere: any = {
-        OR: [
-          { userId: session.user.id },
-          { visibility: "PUBLIC" },
-          {
-            visibility: "SHARED",
-            id: { in: sharedPostIds.map(sr => sr.resourceId) },
-          },
-        ],
-      };
+    if (postWhere) {
+      const andClauses: any[] = [];
 
-      // 키워드
       if (q.trim()) {
-        postWhere.AND = [
-          {
-            OR: [
-              { title: { contains: q.trim(), mode: "insensitive" } },
-              { content: { contains: q.trim(), mode: "insensitive" } },
-            ],
-          },
-        ];
+        andClauses.push({
+          OR: [
+            { title: { contains: q.trim(), mode: "insensitive" } },
+            { content: { contains: q.trim(), mode: "insensitive" } },
+          ],
+        });
       }
 
-      // 날짜 필터
       if (dateFrom || dateTo) {
         const dateFilter: any = {};
         if (dateFrom) dateFilter.gte = new Date(dateFrom);
@@ -151,37 +110,42 @@ export async function GET(request: NextRequest) {
           to.setHours(23, 59, 59, 999);
           dateFilter.lte = to;
         }
-
-        if (postWhere.AND) {
-          postWhere.AND.push({ createdAt: dateFilter });
-        } else {
-          postWhere.AND = [{ createdAt: dateFilter }];
-        }
+        andClauses.push({ createdAt: dateFilter });
       }
 
-      // 태그 필터
       if (tagIds.length > 0) {
-        const tagFilter = {
-          postTags: { some: { tagId: { in: tagIds } } },
-        };
-        if (postWhere.AND) {
-          postWhere.AND.push(tagFilter);
-        } else {
-          postWhere.AND = [tagFilter];
-        }
+        andClauses.push({ postTags: { some: { tagId: { in: tagIds } } } });
       }
 
-      posts = await prisma.post.findMany({
-        where: postWhere,
-        include: {
-          user: { select: { id: true, name: true } },
-          postTags: { include: { tag: true } },
-          _count: { select: { comments: true } },
-        },
-        orderBy: { createdAt: "desc" },
-        take: 50,
-      });
+      if (andClauses.length > 0) postWhere.AND = andClauses;
     }
+
+    // ✅ [성능] 파일 검색 + 게시글 검색 병렬 실행
+    const [rawFiles, posts] = await Promise.all([
+      fileWhere
+        ? prisma.file.findMany({
+            where: fileWhere,
+            include: { fileTags: { include: { tag: true } } },
+            orderBy: { createdAt: "desc" },
+            take: 50,
+          })
+        : Promise.resolve([]),
+      postWhere
+        ? prisma.post.findMany({
+            where: postWhere,
+            include: {
+              user: { select: { id: true, name: true } },
+              postTags: { include: { tag: true } },
+              _count: { select: { comments: true } },
+            },
+            orderBy: { createdAt: "desc" },
+            take: 50,
+          })
+        : Promise.resolve([]),
+    ]);
+
+    // BigInt 직렬화
+    const files = rawFiles.map((file) => ({ ...file, size: file.size.toString() }));
 
     return NextResponse.json({
       files,
@@ -190,6 +154,7 @@ export async function GET(request: NextRequest) {
       query: q,
       filters: { type, mimeType, tagIds, dateFrom, dateTo },
     });
+
   } catch (error) {
     console.error("Search error:", error);
     return NextResponse.json(

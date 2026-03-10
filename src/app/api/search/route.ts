@@ -5,6 +5,9 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 50;
+
 export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -20,9 +23,13 @@ export async function GET(request: NextRequest) {
     const dateFrom = searchParams.get("dateFrom") || "";
     const dateTo = searchParams.get("dateTo") || "";
 
+    // ✅ 페이지네이션 파라미터
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
+    const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(searchParams.get("limit") || String(DEFAULT_LIMIT))));
+    const skip = (page - 1) * limit;
+
     const tagIds = tagsParam ? tagsParam.split(",").filter(Boolean) : [];
 
-    // ✅ [성능] 파일/게시글 모두 필요한 경우 sharedPostIds를 먼저 1회만 조회
     const needsPost = type === "ALL" || type === "POST";
     const needsFile = type === "ALL" || type === "FILE";
 
@@ -33,16 +40,14 @@ export async function GET(request: NextRequest) {
         }).then((rows) => rows.map((r) => r.resourceId))
       : [];
 
-    // ===== where 조건 구성 (쿼리 실행 전) =====
+    // ===== where 조건 구성 =====
 
-    // 파일 where
     const fileWhere: any = needsFile ? { userId: session.user.id } : null;
 
     if (fileWhere) {
       if (q.trim()) {
         fileWhere.originalName = { contains: q.trim(), mode: "insensitive" };
       }
-
       if (mimeType) {
         const mimeMap: Record<string, any> = {
           image:    { startsWith: "image/" },
@@ -63,7 +68,6 @@ export async function GET(request: NextRequest) {
         };
         if (mimeMap[mimeType]) fileWhere.mimeType = mimeMap[mimeType];
       }
-
       if (dateFrom || dateTo) {
         fileWhere.createdAt = {};
         if (dateFrom) fileWhere.createdAt.gte = new Date(dateFrom);
@@ -73,13 +77,11 @@ export async function GET(request: NextRequest) {
           fileWhere.createdAt.lte = to;
         }
       }
-
       if (tagIds.length > 0) {
         fileWhere.fileTags = { some: { tagId: { in: tagIds } } };
       }
     }
 
-    // 게시글 where
     const postWhere: any = needsPost
       ? {
           OR: [
@@ -92,7 +94,6 @@ export async function GET(request: NextRequest) {
 
     if (postWhere) {
       const andClauses: any[] = [];
-
       if (q.trim()) {
         andClauses.push({
           OR: [
@@ -101,7 +102,6 @@ export async function GET(request: NextRequest) {
           ],
         });
       }
-
       if (dateFrom || dateTo) {
         const dateFilter: any = {};
         if (dateFrom) dateFilter.gte = new Date(dateFrom);
@@ -112,24 +112,24 @@ export async function GET(request: NextRequest) {
         }
         andClauses.push({ createdAt: dateFilter });
       }
-
       if (tagIds.length > 0) {
         andClauses.push({ postTags: { some: { tagId: { in: tagIds } } } });
       }
-
       if (andClauses.length > 0) postWhere.AND = andClauses;
     }
 
-    // ✅ [성능] 파일 검색 + 게시글 검색 병렬 실행
-    const [rawFiles, posts] = await Promise.all([
+    // ✅ 병렬 실행 + 전체 count도 함께 조회
+    const [rawFiles, filesTotalCount, posts, postsTotalCount] = await Promise.all([
       fileWhere
         ? prisma.file.findMany({
             where: fileWhere,
             include: { fileTags: { include: { tag: true } } },
             orderBy: { createdAt: "desc" },
-            take: 50,
+            skip,
+            take: limit,
           })
         : Promise.resolve([]),
+      fileWhere ? prisma.file.count({ where: fileWhere }) : Promise.resolve(0),
       postWhere
         ? prisma.post.findMany({
             where: postWhere,
@@ -139,18 +139,31 @@ export async function GET(request: NextRequest) {
               _count: { select: { comments: true } },
             },
             orderBy: { createdAt: "desc" },
-            take: 50,
+            skip,
+            take: limit,
           })
         : Promise.resolve([]),
+      postWhere ? prisma.post.count({ where: postWhere }) : Promise.resolve(0),
     ]);
 
-    // BigInt 직렬화
     const files = rawFiles.map((file) => ({ ...file, size: file.size.toString() }));
 
     return NextResponse.json({
       files,
       posts,
-      total: files.length + posts.length,
+      // ✅ 페이지네이션 메타데이터
+      pagination: {
+        page,
+        limit,
+        filesTotalCount,
+        postsTotalCount,
+        totalCount: filesTotalCount + postsTotalCount,
+        filesTotalPages: Math.ceil(filesTotalCount / limit),
+        postsTotalPages: Math.ceil(postsTotalCount / limit),
+        hasNextPage:
+          page < Math.ceil(filesTotalCount / limit) ||
+          page < Math.ceil(postsTotalCount / limit),
+      },
       query: q,
       filters: { type, mimeType, tagIds, dateFrom, dateTo },
     });

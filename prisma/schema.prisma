@@ -171,6 +171,8 @@ model ChatRoom {
   messages ChatMessage[]
   calls    Call[]
 
+  metadata  String?
+
   @@map("chat_rooms")
 }
 

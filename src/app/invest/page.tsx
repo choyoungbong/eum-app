@@ -478,6 +478,7 @@ const MAIN_TABS = [
   { key: "forex",     label: "환율/원자재", icon: Globe },
   { key: "feargreed", label: "공포탐욕",  icon: Flame },
   { key: "lotto",     label: "로또",      icon: Ticket },
+  { key: "community", label: "토론",  icon: MessageSquare },
 ] as const;
 
 type MainTab = typeof MAIN_TABS[number]["key"];
@@ -609,6 +610,15 @@ export default function InvestPage() {
         {tab === "forex"     && <ForexTab forex={forex} commodities={commodities} />}
         {tab === "feargreed" && <FearGreedTab data={fearGreed} />}
         {tab === "lotto"     && <LottoTab data={lotto} />}
+        {tab === "community" && (
+          <div className="flex flex-col items-center justify-center py-20 gap-4">
+            <p className="text-zinc-500 text-sm">종목 토론 게시판으로 이동합니다</p>
+            <Link href="/invest/community"
+              className="flex items-center gap-2 px-6 py-3 bg-violet-600 hover:bg-violet-500 text-white rounded-xl text-sm font-semibold transition-colors">
+              <MessageSquare size={15} /> 토론 게시판 열기
+            </Link>
+          </div>
+        )}
 
         <p className="text-center text-[10px] text-zinc-700 mt-6">
           시세는 실시간이 아니며 참고용입니다 · 30초마다 자동 갱신

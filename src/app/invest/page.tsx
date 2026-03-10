@@ -472,13 +472,14 @@ function LottoTab({ data }: { data: LottoData | null }) {
 
 // ── 메인 페이지 ───────────────────────────────────────
 const MAIN_TABS = [
-  { key: "stock",     label: "국내 주식", icon: BarChart2 },
-  { key: "usstock",   label: "미국 주식", icon: TrendingUp },
-  { key: "crypto",    label: "암호화폐",  icon: Coins },
+  { key: "stock",     label: "국내 주식",   icon: BarChart2 },
+  { key: "usstock",   label: "미국 주식",   icon: TrendingUp },
+  { key: "crypto",    label: "암호화폐",    icon: Coins },
   { key: "forex",     label: "환율/원자재", icon: Globe },
-  { key: "feargreed", label: "공포탐욕",  icon: Flame },
-  { key: "lotto",     label: "로또",      icon: Ticket },
-  { key: "community", label: "토론",  icon: MessageSquare },
+  { key: "feargreed", label: "공포탐욕",    icon: Flame },
+  { key: "lotto",     label: "로또",        icon: Ticket },
+  { key: "community", label: "토론",        icon: MessageSquare },
+  { key: "reading",   label: "리딩방",      icon: Zap },
 ] as const;
 
 type MainTab = typeof MAIN_TABS[number]["key"];
@@ -616,6 +617,15 @@ export default function InvestPage() {
             <Link href="/invest/community"
               className="flex items-center gap-2 px-6 py-3 bg-violet-600 hover:bg-violet-500 text-white rounded-xl text-sm font-semibold transition-colors">
               <MessageSquare size={15} /> 토론 게시판 열기
+            </Link>
+          </div>
+        )}
+        {tab === "reading" && (
+          <div className="flex flex-col items-center justify-center py-20 gap-4">
+            <p className="text-zinc-500 text-sm">실시간 AI 리딩방으로 이동합니다</p>
+            <Link href="/invest/reading"
+              className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-emerald-600 to-violet-600 text-white rounded-xl text-sm font-semibold transition-all hover:opacity-90">
+              <Zap size={15} /> 리딩방 입장
             </Link>
           </div>
         )}

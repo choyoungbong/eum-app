@@ -18,7 +18,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { chatRoomId, receiverId, callType } = body;
 
-    // 유효성 검사
     if (!chatRoomId || !receiverId || !callType) {
       return NextResponse.json(
         { error: "필수 정보가 누락되었습니다" },
@@ -41,13 +40,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 수신자 정보 조회
+    // 수신자 정보 조회 — fcmToken 불필요 (sendPushToUser가 내부에서 조회)
     const receiver = await prisma.user.findUnique({
       where: { id: receiverId },
       select: {
         id: true,
         name: true,
-        fcmToken: true,
         isOnline: true,
       },
     });
@@ -70,28 +68,23 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // ========== FCM 푸시 알림 전송 ==========
-    if (receiver.fcmToken) {
-      try {
-        // 수정된 fcm.ts의 sendCallNotification 호출
-        const pushResult = await sendCallNotification(
-          receiverId,
-          session.user.name || "사용자",
-          callType,
-          call.id,
-          chatRoomId
-        );
-        
-        if (pushResult.success) {
-          console.log(`✅ 통화 푸시 성공: ${receiver.name} (Status: ${receiver.isOnline ? 'Online' : 'Offline'})`);
-        } else {
-          console.error(`❌ 통화 푸시 전송 실패: ${pushResult.error}`);
-        }
-      } catch (error) {
-        console.error(`❌ 통화 푸시 예외 발생 (${receiver.name}):`, error);
+    // FCM 푸시 알림 전송 — userId 기준으로 모든 기기에 전송
+    try {
+      const pushResult = await sendCallNotification(
+        receiverId,
+        session.user.name || "사용자",
+        callType,
+        call.id,
+        chatRoomId
+      );
+
+      if (pushResult.success) {
+        console.log(`✅ 통화 푸시 성공: ${receiver.name} (${receiver.isOnline ? "Online" : "Offline"})`);
+      } else {
+        console.error(`❌ 통화 푸시 실패: ${pushResult.error}`);
       }
-    } else {
-      console.warn(`⚠️ FCM 토큰 없음: ${receiver.name}`);
+    } catch (error) {
+      console.error(`❌ 통화 푸시 예외 (${receiver.name}):`, error);
     }
 
     return NextResponse.json(

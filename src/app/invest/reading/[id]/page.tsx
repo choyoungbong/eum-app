@@ -10,6 +10,7 @@ import {
   BarChart2, Coins, Globe, MessageSquare, Loader2,
 } from "lucide-react";
 import { toast } from "@/components/Toast";
+import { Sparkles } from "lucide-react";
 
 interface Message {
   id: string; content: string; createdAt: string;
@@ -49,6 +50,9 @@ export default function ReadingRoomPage() {
   const [cursor, setCursor]   = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [connected, setConnected] = useState(false);
+
+  const [sendingSignal, setSendingSignal] = useState(false);
+  const [signalSent,    setSignalSent]    = useState(false);
 
   const socketRef   = useRef<Socket | null>(null);
   const bottomRef   = useRef<HTMLDivElement>(null);
@@ -185,6 +189,26 @@ export default function ReadingRoomPage() {
     return prev !== curr;
   };
 
+  // 핸들러 추가
+  const handleSignal = async () => {
+    setSendingSignal(true);
+    const marketType =
+      room?.metadata ? JSON.parse(room.metadata).category : "KOSPI";
+    const res = await fetch("/api/invest/signal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomId: id, marketType }),
+    });
+    if (res.ok) {
+      const d = await res.json();
+      // 소켓으로 받거나 메시지 목록 새로고침
+      setMessages((prev) => [...prev, d.message]);
+      setSignalSent(true);
+      setTimeout(() => setSignalSent(false), 3000);
+    }
+    setSendingSignal(false);
+  };
+
   if (status === "loading") {
     return <div className="min-h-screen flex items-center justify-center bg-zinc-950"><div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" /></div>;
   }
@@ -202,6 +226,15 @@ export default function ReadingRoomPage() {
       {/* 헤더 */}
       <header className="shrink-0 z-20 bg-zinc-950/90 backdrop-blur-xl border-b border-white/5">
         <div className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
+          <button onClick={handleSignal} disabled={sendingSignal}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all disabled:opacity-50 ${
+              signalSent
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                : "bg-violet-500/10 border-violet-500/20 text-violet-400 hover:border-violet-500/40"
+            }`}>
+            <Sparkles size={12} className={sendingSignal ? "animate-pulse" : ""} />
+            {sendingSignal ? "분석 중..." : signalSent ? "시그널 발송 완료" : "AI 시그널"}
+          </button>
           <Link href="/invest/reading" className="p-1.5 rounded-lg hover:bg-white/5 transition-colors text-zinc-400 hover:text-zinc-200">
             <ChevronLeft size={20} />
           </Link>

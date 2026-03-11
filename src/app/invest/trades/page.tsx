@@ -8,6 +8,7 @@ import {
   ChevronLeft, Plus, Trash2, ArrowUpRight, ArrowDownRight,
   BarChart2, Coins, TrendingUp, X, Receipt,
 } from "lucide-react";
+import InvestNav from "@/components/InvestNav";
 
 interface Trade {
   id: string; assetType: string; symbol: string; name: string;
@@ -229,7 +230,7 @@ export default function TradesPage() {
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+      <main className="max-w-3xl mx-auto px-4 pb-20 py-6 space-y-4">
         {/* 요약 카드 */}
         {trades.length > 0 && (
           <div className="grid grid-cols-3 gap-3">
@@ -344,6 +345,7 @@ export default function TradesPage() {
       </main>
 
       {showAdd && <AddTradeModal onClose={() => setShowAdd(false)} onSuccess={fetchTrades} />}
+      <InvestNav />
     </div>
   );
 }

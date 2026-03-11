@@ -10,6 +10,7 @@ import {
   ChevronRight, Clock, Tag as TagIcon, Send,
 } from "lucide-react";
 import { toast } from "@/components/Toast";
+import InvestNav from "@/components/InvestNav";
 
 // ── 타입 ──────────────────────────────────────────────
 interface Post {
@@ -261,7 +262,7 @@ export default function CommunityPage() {
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-4 py-4 relative">
+      <main className="max-w-3xl mx-auto px-4 pb-20 py-4 relative">
         {loading ? (
           <div className="space-y-3">
             {[...Array(5)].map((_, i) => (
@@ -365,6 +366,7 @@ export default function CommunityPage() {
           onSuccess={() => fetchPosts(category, 1)}
         />
       )}
+      <InvestNav />
     </div>
   );
 }

@@ -597,3 +597,28 @@ model UserFcmToken {
   @@index([userId])
   @@map("user_fcm_tokens")
 }
+
+model Portfolio {
+  id        String           @id @default(cuid())
+  userId    String           @map("user_id")
+  name      String
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assets    PortfolioAsset[]
+  @@map("portfolios")
+}
+
+model PortfolioAsset {
+  id          String    @id @default(cuid())
+  portfolioId String    @map("portfolio_id")
+  assetType   String    @map("asset_type")
+  symbol      String
+  name        String
+  quantity    Float
+  avgPrice    Float     @map("avg_price")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  portfolio   Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  @@map("portfolio_assets")
+}

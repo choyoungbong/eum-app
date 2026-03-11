@@ -47,6 +47,11 @@ function AddAssetModal({
   const [avgPrice, setAvgPrice]  = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  const [showRebalance, setShowRebalance] = useState(false);
+  const [rebalanceText, setRebalanceText] = useState("");
+  const [rebalancing,   setRebalancing]   = useState(false);
+  const rebalanceRef = useRef<HTMLDivElement>(null);
+
   const handleSubmit = async () => {
     if (!symbol.trim() || !name.trim() || !quantity || !avgPrice) {
       toast.warning("모든 항목을 입력하세요"); return;
@@ -68,6 +73,26 @@ function AddAssetModal({
       else { const d = await res.json(); toast.error(d.error ?? "추가 실패"); }
     } catch { toast.error("추가 중 오류가 발생했습니다"); }
     finally { setSubmitting(false); }
+  };
+
+  const handleRebalance = async () => {
+    if (!activePortfolio) return;
+    setRebalanceText(""); setShowRebalance(true); setRebalancing(true);
+    const res = await fetch("/api/invest/rebalance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ portfolioId: activePortfolio.id }),
+    });
+    if (!res.ok || !res.body) { setRebalancing(false); return; }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      setRebalanceText((prev) => prev + decoder.decode(value, { stream: true }));
+      rebalanceRef.current?.scrollTo({ top: rebalanceRef.current.scrollHeight, behavior: "smooth" });
+    }
+    setRebalancing(false);
   };
 
   return (
@@ -418,6 +443,13 @@ export default function PortfolioPage() {
                   </div>
                 </div>
 
+                // 버튼 (요약 카드 아래):
+                <button onClick={handleRebalance} disabled={rebalancing || !activePortfolio?.assets.length}
+                  className="w-full flex items-center justify-center gap-2 py-3 bg-violet-600/10 hover:bg-violet-600/15 border border-violet-500/20 hover:border-violet-500/40 rounded-2xl text-xs text-violet-400 font-semibold transition-all disabled:opacity-40">
+                  <Sparkles size={14} className={rebalancing ? "animate-pulse" : ""} />
+                  {rebalancing ? "AI 분석 중..." : "AI 리밸런싱 제안받기"}
+                </button>
+
                 {/* 종목 추가 버튼 */}
                 <button onClick={() => setShowAddAsset(true)}
                   className="w-full flex items-center justify-center gap-2 py-3 border border-dashed border-white/10 hover:border-violet-500/40 rounded-2xl text-xs text-zinc-600 hover:text-violet-400 transition-all">
@@ -521,6 +553,32 @@ export default function PortfolioPage() {
           onClose={() => setShowAddAsset(false)}
           onSuccess={fetchPortfolios}
         />
+      )}
+
+      // AI 리밸런싱 결과 모달
+      {showRebalance && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center"
+          onClick={() => setShowRebalance(false)}>
+          <div className="bg-zinc-900 border border-white/8 rounded-t-3xl sm:rounded-2xl w-full sm:max-w-2xl flex flex-col" style={{maxHeight:"85vh"}} onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/6 shrink-0">
+              <div className="flex items-center gap-2">
+                <Sparkles size={16} className="text-violet-400" />
+                <p className="font-semibold text-zinc-100 text-sm">AI 리밸런싱 제안</p>
+              </div>
+              <button onClick={()=>setShowRebalance(false)} className="p-1.5 rounded-lg hover:bg-white/6 text-zinc-500"><X size={16} /></button>
+            </div>
+            <div ref={rebalanceRef} className="flex-1 overflow-y-auto px-5 py-5">
+              {rebalanceText.length === 0 && rebalancing && (
+                <div className="flex items-center gap-2 text-zinc-500">
+                  {[0,150,300].map(d=><div key={d} className="w-2 h-2 bg-violet-500 rounded-full animate-bounce" style={{animationDelay:`${d}ms`}} />)}
+                  <span className="text-xs ml-1">포트폴리오를 분석하고 있습니다...</span>
+                </div>
+              )}
+              <div className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{rebalanceText}</div>
+              {rebalancing && <span className="inline-block w-2 h-4 bg-violet-500 rounded-sm animate-pulse ml-0.5" />}
+            </div>
+          </div>
+        </div>
       )}
       <InvestNav />
     </div>

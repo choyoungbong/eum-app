@@ -9,6 +9,7 @@ import {
   BarChart2, Coins, Globe, Users, Clock,
 } from "lucide-react";
 import { toast } from "@/components/Toast";
+import InvestNav from "@/components/InvestNav";
 
 interface Room {
   id: string; name: string; type: string; createdAt: string;
@@ -127,7 +128,7 @@ export default function ReadingRoomsPage() {
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-4 py-6 relative space-y-6">
+      <main className="max-w-3xl mx-auto px-4 pb-20 py-6 relative space-y-6">
         {loading ? (
           <div className="space-y-3">
             {[...Array(5)].map((_, i) => (
@@ -174,6 +175,7 @@ export default function ReadingRoomsPage() {
           </>
         )}
       </main>
+      <InvestNav />
     </div>
   );
 }

@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { toast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
+import InvestNav from "@/components/InvestNav";
 
 // ── 타입 ──────────────────────────────────────────────
 interface Asset {
@@ -335,7 +336,7 @@ export default function PortfolioPage() {
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-4 py-6 relative space-y-4">
+      <main className="max-w-3xl mx-auto px-4 pb-20 py-6 relative space-y-4">
 
         {loading ? (
           <div className="space-y-3">
@@ -521,6 +522,7 @@ export default function PortfolioPage() {
           onSuccess={fetchPortfolios}
         />
       )}
+      <InvestNav />
     </div>
   );
 }

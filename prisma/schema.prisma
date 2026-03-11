@@ -622,3 +622,34 @@ model PortfolioAsset {
   portfolio   Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
   @@map("portfolio_assets")
 }
+
+model Watchlist {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  assetType   String   @map("asset_type")   // STOCK_KR | STOCK_US | CRYPTO
+  symbol      String
+  name        String
+  targetPrice Float?   @map("target_price")
+  createdAt   DateTime @default(now()) @map("created_at")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, symbol])
+  @@map("watchlist")
+}
+
+model Trade {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  portfolioId String?  @map("portfolio_id")
+  assetType   String   @map("asset_type")   // STOCK_KR | STOCK_US | CRYPTO
+  symbol      String
+  name        String
+  side        String                        // BUY | SELL
+  quantity    Float
+  price       Float
+  fee         Float    @default(0)
+  memo        String?
+  tradedAt    DateTime @map("traded_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("trades")
+}

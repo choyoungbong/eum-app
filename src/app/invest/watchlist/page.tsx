@@ -8,6 +8,7 @@ import {
   ChevronLeft, Star, Plus, Trash2, Bell, BellOff,
   TrendingUp, TrendingDown, BarChart2, Coins, X, RefreshCw,
 } from "lucide-react";
+import InvestNav from "@/components/InvestNav";
 
 interface WatchItem {
   id: string; assetType: string; symbol: string;
@@ -199,7 +200,7 @@ export default function WatchlistPage() {
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-4 py-6">
+      <main className="max-w-3xl mx-auto px-4 pb-20 py-6">
         {loading ? (
           <div className="space-y-2">
             {[...Array(4)].map((_, i) => (
@@ -297,6 +298,7 @@ export default function WatchlistPage() {
       </main>
 
       {showAdd && <AddModal onClose={() => setShowAdd(false)} onSuccess={fetchList} />}
+      <InvestNav />
     </div>
   );
 }

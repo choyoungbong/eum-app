@@ -109,7 +109,7 @@ export async function POST(
     // 채팅방 멤버 조회 (파일 권한 + FCM용)
     const members = await prisma.chatRoomMember.findMany({
       where: { chatRoomId },
-      include: { user: { select: { id: true, name: true, fcmToken: true } } },
+      include: { user: { select: { id: true, name: true, fcmTokens: true } } },
     });
 
     // 파일 공유 시 멤버들에게 권한 부여
@@ -145,25 +145,27 @@ export async function POST(
 
     // FCM 푸시 알림 (나 제외한 멤버들)
     for (const member of members) {
-      if (member.userId !== session.user.id && member.user.fcmToken) {
-        try {
-          if (type === "TEXT") {
-            await sendChatMessageNotification(
-              member.user.fcmToken,
-              session.user.name || "사용자",
-              content,
-              chatRoomId
-            );
-          } else if (type === "FILE" && message.file) {
-            await sendFileSharedNotification(
-              member.user.fcmToken,
-              session.user.name || "사용자",
-              (message.file as any).originalName,
-              chatRoomId
-            );
+      if (member.userId !== session.user.id && member.user.fcmTokens?.length > 0) {
+        for (const tokenObj of member.user.fcmTokens) {
+          try {
+            if (type === "TEXT") {
+              await sendChatMessageNotification(
+                tokenObj.token,
+                session.user.name || "사용자",
+                content,
+                chatRoomId
+              );
+            } else if (type === "FILE" && message.file) {
+              await sendFileSharedNotification(
+                tokenObj.token,
+                session.user.name || "사용자",
+                (message.file as any).originalName,
+                chatRoomId
+              );
+            }
+          } catch (error) {
+            console.error(`❌ FCM 실패 (${member.user.name}):`, error);
           }
-        } catch (error) {
-          console.error(`❌ FCM 실패 (${member.user.name}):`, error);
         }
       }
     }

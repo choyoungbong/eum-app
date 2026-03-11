@@ -15,6 +15,7 @@ import { toast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { getFileIcon, getFileColor, formatFileSize } from "@/lib/client-utils";
 import FilePreviewModal from "@/components/FilePreviewModal";
+import InvestWidget from "@/components/InvestWidget";
 
 // ── 알림 벨 ──────────────────────────────────────────
 function NotificationBell() {
@@ -294,6 +295,36 @@ export default function DashboardPage() {
               <span className="text-[9px] font-medium">{label}</span>
             </Link>
           ))}
+
+          {/* AI Invest FAB — 중앙 강조 버튼 */}
+          <Link href="/invest"
+            className={`flex flex-col items-center gap-0.5 -mt-5 transition-all ${
+              pathname.startsWith("/invest") ? "opacity-100" : "opacity-90"
+            }`}>
+            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-xl transition-all ${
+              pathname.startsWith("/invest")
+                ? "bg-gradient-to-br from-emerald-500 to-blue-600 shadow-emerald-500/30"
+                : "bg-gradient-to-br from-violet-600 to-blue-600 shadow-violet-500/25"
+            }`}>
+              <TrendingUp size={20} className="text-white" />
+            </div>
+            <span className={`text-[9px] font-bold ${
+              pathname.startsWith("/invest") ? "text-emerald-400" : "text-violet-400"
+            }`}>
+              AI Invest
+            </span>
+          </Link>
+
+          {NAV_ITEMS.slice(2, 4).filter(({ href }) => href !== "/invest").map(({ href, label, icon: Icon }) => (
+            <Link key={href} href={href}
+              className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-all ${
+                pathname === href ? "text-violet-400" : "text-zinc-600"
+              }`}>
+              <Icon size={18} />
+              <span className="text-[9px] font-medium">{label}</span>
+            </Link>
+          ))}
+          
           {/* 업로드 FAB */}
           <label className="w-12 h-12 bg-gradient-to-br from-violet-600 to-blue-600 text-white rounded-2xl flex items-center justify-center -mt-5 shadow-xl shadow-violet-500/25 cursor-pointer">
             <Upload size={18} />
@@ -358,6 +389,10 @@ export default function DashboardPage() {
       </div>
 
       <main className="max-w-7xl w-full mx-auto px-4 md:px-6 py-6 flex-1 relative">
+
+        <div className="mb-6">
+          <InvestWidget />
+        </div>
 
         {/* 검색바 */}
         <div className="mb-6 relative">

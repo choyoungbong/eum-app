@@ -156,6 +156,10 @@ model User {
   apiKeys              ApiKey[]
   fileVersions         FileVersion[]
   fcmTokens            UserFcmToken[]
+
+  portfolios    Portfolio[]
+  watchlist     Watchlist[]
+  trades        Trade[]
   
   @@map("users")
 }
@@ -366,6 +370,8 @@ model Post {
   postTags  PostTag[]
   likes     PostLike[]
   bookmarks PostBookmark[]
+
+  category    String  @default("FREE")
 
   @@index([userId])
   @@index([userId, createdAt(sort: Desc)])

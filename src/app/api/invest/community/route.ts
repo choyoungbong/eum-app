@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { prisma as db } from "@/lib/db";
 
 const INVEST_CATEGORIES = ["KOSPI", "KOSDAQ", "NASDAQ", "SP500", "CRYPTO", "LOTTO", "FREE"] as const;
 type InvestCategory = typeof INVEST_CATEGORIES[number];
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
             (tags as string[]).map(async (name: string) => {
               const tag = await db.tag.upsert({
                 where: { name },
-                create: { name, userId: session.user.id },
+                create: { name },
                 update: {},
               });
               return { tagId: tag.id };

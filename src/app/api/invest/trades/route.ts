@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { prisma as db } from "@/lib/db";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -17,7 +17,6 @@ export async function GET(req: NextRequest) {
     take: limit,
   });
 
-  // 실현 손익 계산 (심볼별)
   const stats = trades.reduce((acc: any, t: any) => {
     if (!acc[t.symbol]) acc[t.symbol] = { totalBuy: 0, totalSell: 0, buyQty: 0 };
     if (t.side === "BUY") {
@@ -44,7 +43,7 @@ export async function POST(req: NextRequest) {
 
   const trade = await (db as any).trade.create({
     data: {
-      userId: session.user.id,
+      userId:      session.user.id,
       portfolioId: portfolioId ?? null,
       assetType, symbol, name, side,
       quantity: Number(quantity),

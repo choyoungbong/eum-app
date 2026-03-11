@@ -192,8 +192,7 @@ export default function ReadingRoomPage() {
   // 핸들러 추가
   const handleSignal = async () => {
     setSendingSignal(true);
-    const marketType =
-      room?.metadata ? JSON.parse(room.metadata).category : "KOSPI";
+    const marketType = room?.meta?.category ?? "KOSPI";
     const res = await fetch("/api/invest/signal", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

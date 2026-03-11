@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { prisma as db } from "@/lib/db";
 import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();

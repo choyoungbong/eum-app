@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { prisma as db } from "@/lib/db";
 import { sendPushToUser } from "@/lib/fcm";
 
 // 목표가 체크 — cron 또는 수동 트리거

@@ -1,20 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { prisma as db } from "@/lib/db";
 import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
 
-// POST /api/invest/signal  → AI 시그널 생성 후 리딩방에 메시지 자동 발송
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { roomId, marketType } = await req.json();
-  // marketType: "KOSPI" | "NASDAQ" | "CRYPTO"
 
-  // 현재 시세 데이터 조회
   const endpoints: Record<string, string> = {
     KOSPI:  "/api/invest/stocks",
     NASDAQ: "/api/invest/us-stocks",
@@ -48,13 +45,15 @@ ${top5}
   const text = (aiResponse.content[0] as { type: string; text: string }).text;
 
   // 리딩방에 AI 봇 메시지 저장
-  const botMessage = await db.message.create({
+  const botMessage = await db.chatMessage.create({
     data: {
       content:    `🤖 AI 시그널\n\n${text}`,
       chatRoomId: roomId,
-      userId:     session.user.id, // 실제로는 AI 봇 userId 별도 관리 권장
+      senderId:   session.user.id,
     },
-    include: { user: { select: { id: true, name: true, image: true } } },
+    include: {
+      sender: { select: { id: true, name: true, avatarUrl: true } },
+    },
   });
 
   return NextResponse.json({ message: botMessage, signal: text });

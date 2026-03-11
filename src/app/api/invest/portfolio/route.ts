@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { prisma as db } from "@/lib/db";
 
 // Portfolio, PortfolioAsset 모델이 없으면 인메모리 대신 Post 메타데이터로 저장
 // 아래는 별도 테이블 없이 JSON 파일 방식 대신 Prisma 확장 모델 사용 예시

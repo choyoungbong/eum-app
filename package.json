@@ -14,11 +14,12 @@
     "ai:update": "npx repomix && git add . && git commit -m \"Update code and AI context\" && git push origin master"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@prisma/client": "^5.22.0",
     "archiver": "^7.0.1",
     "bcryptjs": "^3.0.3",
     "date-fns": "^4.1.0",
-    "file-type": "^21.3.0",
+    "file-type": "^21.3.1",
     "firebase": "^12.9.0",
     "firebase-admin": "^13.6.1",
     "lucide-react": "^0.575.0",

@@ -1,9 +1,9 @@
-// src/app/api/auth/2fa/disable/route.ts
+﻿// src/app/api/auth/2fa/disable/route.ts
 // DELETE → 2FA 비활성화 (현재 OTP 코드 또는 백업 코드 확인 후)
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import * as OTPAuth from "otpauth";
 

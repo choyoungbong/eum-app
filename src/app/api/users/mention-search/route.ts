@@ -1,10 +1,10 @@
-// src/app/api/users/mention-search/route.ts
+﻿// src/app/api/users/mention-search/route.ts
 // GET /api/users/mention-search?q=검색어&limit=5
 // @멘션 자동완성용 빠른 사용자 검색
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { withCache, TTL } from "@/lib/cache";
 

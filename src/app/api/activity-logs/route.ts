@@ -1,8 +1,8 @@
-// src/app/api/activity-logs/route.ts
+﻿// src/app/api/activity-logs/route.ts
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 // GET /api/activity-logs?page=1&limit=30&action=FILE_UPLOAD

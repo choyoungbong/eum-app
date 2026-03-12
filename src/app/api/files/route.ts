@@ -1,4 +1,4 @@
-// src/app/api/files/route.ts
+﻿// src/app/api/files/route.ts
 // ⚠️ 수정사항:
 // 1. myFilesWhere에 deletedAt: null 추가 (휴지통 파일 노출 방지)
 // 2. pinned=true 쿼리파라미터 지원 추가 (PinnedFilesSection용)
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 export async function GET(request: NextRequest) {

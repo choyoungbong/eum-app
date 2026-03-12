@@ -1,4 +1,4 @@
-// src/app/api/files/shared/route.ts
+﻿// src/app/api/files/shared/route.ts
 // ⚠️ 수정: SharedResource 모델에 file 직접 관계 없음
 //    resourceId로 별도 File 조회로 변경
 
@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 export async function GET(request: NextRequest) {

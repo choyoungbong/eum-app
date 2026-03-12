@@ -1,10 +1,10 @@
-// src/app/api/auth/2fa/setup/route.ts
+﻿// src/app/api/auth/2fa/setup/route.ts
 // POST → 비밀키 생성 + QR코드 반환 (아직 활성화 안 됨)
 // PATCH → OTP 검증 후 2FA 최종 활성화 + 백업 코드 발급
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import * as OTPAuth from "otpauth";
 import QRCode from "qrcode";

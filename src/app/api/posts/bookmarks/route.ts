@@ -1,9 +1,9 @@
-// src/app/api/posts/bookmarks/route.ts
+﻿// src/app/api/posts/bookmarks/route.ts
 // GET — 내 북마크 목록
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 export async function GET() {

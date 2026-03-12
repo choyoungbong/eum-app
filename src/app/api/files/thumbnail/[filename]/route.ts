@@ -1,70 +1,77 @@
+﻿// src/app/api/files/shared/route.ts
+// ⚠️ 수정: SharedResource 모델에 file 직접 관계 없음
+//    resourceId로 별도 File 조회로 변경
+
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
-import { readFile } from "fs/promises";
-import { join, basename, resolve } from "path";
-import { existsSync } from "fs";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/db";
 
-const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
-
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { filename: string } }
-) {
+export async function GET(request: NextRequest) {
   try {
-    // ✅ [보안-1] Path Traversal 방지
-    // basename()으로 디렉터리 경로 제거 (예: ../../etc/passwd → passwd)
-    const safeFilename = basename(params.filename);
-
-    // 빈 파일명 또는 숨김 파일 차단
-    if (!safeFilename || safeFilename.startsWith(".")) {
-      return NextResponse.json(
-        { error: "잘못된 요청입니다" },
-        { status: 400 }
-      );
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
-    const thumbnailPath = join(STORAGE_PATH, "thumbnails", safeFilename);
+    // 1. 공유받은 리소스 조회 (FILE 타입만)
+    const sharedResources = await prisma.sharedResource.findMany({
+      where: {
+        resourceType: "FILE",
+        sharedWithId: session.user.id,
+      },
+      include: {
+        owner: { select: { name: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
 
-    // ✅ resolve()로 최종 경로가 thumbnails 디렉터리 내부인지 2차 검증
-    const resolvedPath = resolve(thumbnailPath);
-    const resolvedBase = resolve(join(STORAGE_PATH, "thumbnails"));
-
-    if (!resolvedPath.startsWith(resolvedBase + "/") && resolvedPath !== resolvedBase) {
-      return NextResponse.json(
-        { error: "잘못된 요청입니다" },
-        { status: 400 }
-      );
+    if (sharedResources.length === 0) {
+      return NextResponse.json({ files: [] });
     }
 
-    if (!existsSync(resolvedPath)) {
-      return NextResponse.json(
-        { error: "썸네일을 찾을 수 없습니다" },
-        { status: 404 }
-      );
-    }
-
-    const fileBuffer = await readFile(resolvedPath);
-
-    // ✅ 확장자 기반 Content-Type 설정 (jpeg 고정 → 실제 파일 타입 반영)
-    const ext = safeFilename.split(".").pop()?.toLowerCase();
-    const contentTypeMap: Record<string, string> = {
-      jpg: "image/jpeg",
-      jpeg: "image/jpeg",
-      png: "image/png",
-      webp: "image/webp",
-      gif: "image/gif",
-    };
-    const contentType = contentTypeMap[ext ?? ""] ?? "image/jpeg";
-
-    return new NextResponse(fileBuffer, {
-      headers: {
-        "Content-Type": contentType,
-        "Cache-Control": "public, max-age=31536000, immutable",
+    // 2. resourceId로 파일 정보 별도 조회
+    const fileIds = sharedResources.map((sr: any) => sr.resourceId);
+    const files = await prisma.file.findMany({
+      where:  { id: { in: fileIds }, deletedAt: null },
+      select: {
+        id: true, filename: true, originalName: true,
+        size: true, mimeType: true, thumbnailUrl: true, createdAt: true,
+        user: { select: { name: true, email: true } },
       },
     });
+
+    const fileMap = Object.fromEntries(files.map((f: any) => [f.id, f]));
+
+    // 3. 조합
+    const result = sharedResources
+      .map((share: any) => {
+        const file = fileMap[share.resourceId];
+        if (!file) return null;
+        return {
+          id:            file.id,
+          filename:      file.filename,
+          originalName:  file.originalName,
+          size:          file.size.toString(),
+          mimeType:      file.mimeType,
+          thumbnailUrl:  file.thumbnailUrl,
+          createdAt:     file.createdAt,
+          sharedBy:      share.owner.name,
+          sharedByEmail: share.owner.email,
+          permission:    share.permission,
+          sharedAt:      share.createdAt,
+        };
+      })
+      .filter(Boolean);
+
+    return NextResponse.json({ files: result });
+
   } catch (error) {
-    console.error("Thumbnail serve error:", error);
+    console.error("Shared files fetch error:", error);
     return NextResponse.json(
-      { error: "썸네일 로딩 실패" },
+      { error: "공유 파일 조회 중 오류가 발생했습니다" },
       { status: 500 }
     );
   }

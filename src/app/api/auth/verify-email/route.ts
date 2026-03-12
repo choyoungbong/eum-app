@@ -1,9 +1,9 @@
-// src/app/api/auth/verify-email/route.ts
+﻿// src/app/api/auth/verify-email/route.ts
 // 이메일 인증 재발송 + 토큰 검증 API
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import crypto from "crypto";

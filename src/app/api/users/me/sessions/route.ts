@@ -1,10 +1,10 @@
-// src/app/api/users/me/sessions/route.ts
+﻿// src/app/api/users/me/sessions/route.ts
 // GET  — 내 활성 세션 목록
 // DELETE — 특정 세션 또는 현재 외 모든 세션 로그아웃
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 // GET — 세션 목록

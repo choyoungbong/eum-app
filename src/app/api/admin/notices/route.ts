@@ -1,10 +1,10 @@
-// ══════════════════════════════════════════════════════════
+﻿// ══════════════════════════════════════════════════════════
 // src/app/api/admin/notices/route.ts — 시스템 공지 CRUD
 // ══════════════════════════════════════════════════════════
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 // GET — 활성 공지 (모든 사용자 접근 가능)

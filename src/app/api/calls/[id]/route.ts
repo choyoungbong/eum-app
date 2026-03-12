@@ -1,207 +1,73 @@
+﻿// src/app/api/auth/verify-email/route.ts
+// 이메일 인증 재발송 + 토큰 검증 API
+
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { sendEmail } from "@/lib/email";
+import crypto from "crypto";
 
-// 통화 상태 업데이트 (수락/거절/종료)
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+// POST /api/auth/verify-email — 인증 이메일 발송 (로그인 상태)
+export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
-      return NextResponse.json(
-        { error: "인증이 필요합니다" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
-    const callId = params.id;
-    const body = await request.json();
-    const { action } = body; // "accept", "reject", "end"
-
-    // 통화 조회
-    const call = await prisma.call.findUnique({
-      where: { id: callId },
-      include: {
-        chatRoom: true,
-      },
+    const user = await prisma.user.findUnique({
+      where: { id: session.user.id },
     });
 
-    if (!call) {
-      return NextResponse.json(
-        { error: "통화를 찾을 수 없습니다" },
-        { status: 404 }
-      );
+    if (!user) {
+      return NextResponse.json({ error: "사용자를 찾을 수 없습니다" }, { status: 404 });
+    }
+    if (user.emailVerified) {
+      return NextResponse.json({ error: "이미 인증된 이메일입니다" }, { status: 400 });
     }
 
-    // 권한 확인 (발신자 또는 수신자만)
-    if (call.initiatorId !== session.user.id && call.receiverId !== session.user.id) {
-      return NextResponse.json(
-        { error: "권한이 없습니다" },
-        { status: 403 }
-      );
-    }
-
-    let updatedCall;
-    let systemMessage = "";
-
-    switch (action) {
-      case "accept":
-        // 수신자만 수락 가능
-        if (call.receiverId !== session.user.id) {
-          return NextResponse.json(
-            { error: "수신자만 통화를 수락할 수 있습니다" },
-            { status: 403 }
-          );
-        }
-
-        updatedCall = await prisma.call.update({
-          where: { id: callId },
-          data: {
-            status: "ACCEPTED",
-            startedAt: new Date(),
-          },
-        });
-        systemMessage = "통화가 시작되었습니다.";
-        break;
-
-      case "reject":
-        // 수신자만 거절 가능
-        if (call.receiverId !== session.user.id) {
-          return NextResponse.json(
-            { error: "수신자만 통화를 거절할 수 있습니다" },
-            { status: 403 }
-          );
-        }
-
-        updatedCall = await prisma.call.update({
-          where: { id: callId },
-          data: {
-            status: "REJECTED",
-            endedAt: new Date(),
-          },
-        });
-        systemMessage = "통화가 거절되었습니다.";
-        break;
-
-      case "end":
-        // 발신자 또는 수신자 둘 다 종료 가능
-        const endedAt = new Date();
-        const duration = call.startedAt
-          ? Math.floor((endedAt.getTime() - call.startedAt.getTime()) / 1000)
-          : 0;
-
-        updatedCall = await prisma.call.update({
-          where: { id: callId },
-          data: {
-            status: "ENDED",
-            endedAt,
-            duration,
-          },
-        });
-
-        if (duration > 0) {
-          const minutes = Math.floor(duration / 60);
-          const seconds = duration % 60;
-          systemMessage = `통화가 종료되었습니다. (${minutes}분 ${seconds}초)`;
-        } else {
-          systemMessage = "통화가 종료되었습니다.";
-        }
-        break;
-
-      default:
-        return NextResponse.json(
-          { error: "잘못된 액션입니다" },
-          { status: 400 }
-        );
-    }
-
-    // 시스템 메시지 생성
-    if (systemMessage) {
-      await prisma.chatMessage.create({
-        data: {
-          chatRoomId: call.chatRoomId,
-          senderId: session.user.id,
-          type: "CALL_LOG",
-          callId: call.id,
-          content: systemMessage,
-        },
-      });
-    }
-
-    return NextResponse.json({
-      message: systemMessage,
-      call: updatedCall,
+    // 기존 토큰 삭제 후 새 토큰 생성
+    await prisma.emailVerificationToken.deleteMany({
+      where: { userId: user.id },
     });
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24시간
+
+    await prisma.emailVerificationToken.create({
+      data: { userId: user.id, token, expiresAt },
+    });
+
+    const verifyUrl = `${process.env.NEXTAUTH_URL}/api/auth/verify-email/confirm?token=${token}`;
+
+    await sendEmail({
+      to: user.email,
+      subject: "[이음] 이메일 인증을 완료해주세요",
+      html: `
+        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
+          <h1 style="font-size: 24px; color: #1e293b; margin-bottom: 8px;">이음 이메일 인증</h1>
+          <p style="color: #475569; margin-bottom: 24px;">
+            안녕하세요, <strong>${user.name}</strong>님!<br/>
+            아래 버튼을 클릭하여 이메일 인증을 완료해주세요.
+          </p>
+          <a href="${verifyUrl}"
+             style="display: inline-block; background: #2563eb; color: white;
+                    padding: 12px 28px; border-radius: 8px; text-decoration: none;
+                    font-weight: bold; font-size: 15px;">
+            이메일 인증하기
+          </a>
+          <p style="color: #94a3b8; font-size: 13px; margin-top: 24px;">
+            이 링크는 24시간 후 만료됩니다.<br/>
+            본인이 요청하지 않았다면 이 이메일을 무시해주세요.
+          </p>
+        </div>
+      `,
+    });
+
+    return NextResponse.json({ message: "인증 이메일을 발송했습니다" });
   } catch (error) {
-    console.error("Call update error:", error);
-    return NextResponse.json(
-      { error: "통화 업데이트 중 오류가 발생했습니다" },
-      { status: 500 }
-    );
-  }
-}
-
-// 통화 상세 조회
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json(
-        { error: "인증이 필요합니다" },
-        { status: 401 }
-      );
-    }
-
-    const callId = params.id;
-
-    const call = await prisma.call.findUnique({
-      where: { id: callId },
-      include: {
-        initiator: {
-          select: {
-            id: true,
-            name: true,
-            isOnline: true,
-          },
-        },
-        receiver: {
-          select: {
-            id: true,
-            name: true,
-            isOnline: true,
-          },
-        },
-        chatRoom: true,
-      },
-    });
-
-    if (!call) {
-      return NextResponse.json(
-        { error: "통화를 찾을 수 없습니다" },
-        { status: 404 }
-      );
-    }
-
-    // 권한 확인
-    if (call.initiatorId !== session.user.id && call.receiverId !== session.user.id) {
-      return NextResponse.json(
-        { error: "권한이 없습니다" },
-        { status: 403 }
-      );
-    }
-
-    return NextResponse.json({ call });
-  } catch (error) {
-    console.error("Call fetch error:", error);
-    return NextResponse.json(
-      { error: "통화 조회 중 오류가 발생했습니다" },
-      { status: 500 }
-    );
+    console.error("POST /api/auth/verify-email error:", error);
+    return NextResponse.json({ error: "이메일 발송 중 오류가 발생했습니다" }, { status: 500 });
   }
 }

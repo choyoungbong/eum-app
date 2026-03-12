@@ -186,6 +186,7 @@ model ChatRoomMember {
   userId     String    @map("user_id")
   joinedAt   DateTime  @default(now()) @map("joined_at")
   lastReadAt DateTime? @map("last_read_at")
+  hiddenAt   DateTime? @map("hidden_at")   // ← 추가: 대화방 숨기기 (삭제한 쪽만)
 
   chatRoom ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -193,6 +194,7 @@ model ChatRoomMember {
   @@unique([chatRoomId, userId])
   @@index([chatRoomId])
   @@index([userId])
+  @@index([hiddenAt])                      // ← 추가: 숨김 필터 쿼리 성능
   @@map("chat_room_members")
 }
 

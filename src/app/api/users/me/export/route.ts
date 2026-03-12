@@ -1,11 +1,11 @@
-// src/app/api/users/me/export/route.ts
+﻿// src/app/api/users/me/export/route.ts
 // ✅ 수정: export const dynamic = 'force-dynamic' 추가
 
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 export async function GET(request: NextRequest) {

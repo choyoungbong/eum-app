@@ -1,41 +1,30 @@
-// src/app/api/posts/[id]/bookmark/route.ts
-// POST — 북마크 토글
+﻿// src/app/api/posts/bookmarks/route.ts
+// GET — 내 북마크 목록
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
-export async function POST(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
 
-  const existing = await prisma.postBookmark.findUnique({
-    where: { postId_userId: { postId: params.id, userId: session.user.id } },
+  const bookmarks = await prisma.postBookmark.findMany({
+    where: { userId: session.user.id },
+    include: {
+      post: {
+        select: {
+          id: true, title: true, content: true, createdAt: true,
+          user: { select: { id: true, name: true } },
+          _count: { select: { comments: true, likes: true } },
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" },
   });
 
-  if (existing) {
-    await prisma.postBookmark.delete({ where: { id: existing.id } });
-    return NextResponse.json({ bookmarked: false });
-  } else {
-    await prisma.postBookmark.create({ data: { postId: params.id, userId: session.user.id } });
-    return NextResponse.json({ bookmarked: true });
-  }
-}
-
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ bookmarked: false });
-
-  const bookmark = await prisma.postBookmark.findUnique({
-    where: { postId_userId: { postId: params.id, userId: session.user.id } },
+  return NextResponse.json({
+    posts: bookmarks.map((b) => ({ ...b.post, bookmarkedAt: b.createdAt })),
   });
-
-  return NextResponse.json({ bookmarked: !!bookmark });
 }

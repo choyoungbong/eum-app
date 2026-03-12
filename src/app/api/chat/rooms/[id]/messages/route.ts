@@ -29,9 +29,9 @@ export async function GET(
     const limit = parseInt(searchParams.get("limit") || "50");
     const before = searchParams.get("before");
 
-    // 멤버십 확인
+    // ✅ 변경: hiddenAt: null 추가 — 내가 삭제한 방은 메시지 조회 불가
     const membership = await prisma.chatRoomMember.findFirst({
-      where: { chatRoomId, userId: session.user.id },
+      where: { chatRoomId, userId: session.user.id, hiddenAt: null },
     });
 
     if (!membership) {
@@ -75,6 +75,16 @@ export async function POST(
     const chatRoomId = params.id;
     const { type, content, fileId, callId } = await request.json();
 
+    // ✅ 추가: 상대방이 이 방을 숨긴 상태면 hiddenAt 해제 → 목록에 다시 표시
+    await prisma.chatRoomMember.updateMany({
+      where: {
+        chatRoomId,
+        userId: { not: session.user.id },
+        hiddenAt: { not: null },
+      },
+      data: { hiddenAt: null },
+    });
+
     // 메시지 생성
     const message = await prisma.chatMessage.create({
       data: {
@@ -96,8 +106,7 @@ export async function POST(
 
     const serializedMessage = serialize(message);
 
-    // ✅ 이벤트명 통일: "message:new" → "message:receive"
-    // (클라이언트 useSocket.ts의 listen 이벤트와 일치)
+    // 소켓 브로드캐스트
     const io = (global as any).io;
     if (io) {
       io.to(`chat:${chatRoomId}`).emit("message:receive", serializedMessage);

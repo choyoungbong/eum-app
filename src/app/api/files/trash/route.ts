@@ -1,10 +1,10 @@
-// src/app/api/files/trash/route.ts
+﻿// src/app/api/files/trash/route.ts
 // GET  — 휴지통 파일 목록
 // DELETE — 휴지통 비우기 (영구 삭제)
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { unlink } from "fs/promises";
 import { existsSync } from "fs";

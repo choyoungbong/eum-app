@@ -1,9 +1,9 @@
-// src/app/api/users/me/avatar/route.ts
+﻿// src/app/api/users/me/avatar/route.ts
 // POST — 아바타 또는 커버 이미지 업로드
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { writeFile, mkdir, unlink } from "fs/promises";
 import { existsSync } from "fs";

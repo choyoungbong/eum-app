@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 // 채팅방 상세 조회
@@ -46,9 +46,10 @@ export async function GET(
       );
     }
 
-    // 참여자 확인
+    // ✅ 변경: hiddenAt: null 조건 추가 — 내가 삭제한 방은 접근 불가
     const isMember = chatRoom.members.some(
-      (member: any) => member.userId === session.user.id
+      (member: any) =>
+        member.userId === session.user.id && member.hiddenAt === null
     );
 
     if (!isMember) {
@@ -68,7 +69,7 @@ export async function GET(
   }
 }
 
-// 채팅방 나가기
+// 채팅방 나가기 / 삭제
 export async function DELETE(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -84,13 +85,25 @@ export async function DELETE(
 
     const chatRoomId = params.id;
 
-    // 멤버십 확인
-    const membership = await prisma.chatRoomMember.findFirst({
-      where: {
-        chatRoomId,
-        userId: session.user.id,
+    // 채팅방 + 멤버 전체 조회
+    const chatRoom = await prisma.chatRoom.findUnique({
+      where: { id: chatRoomId },
+      include: {
+        members: true,
       },
     });
+
+    if (!chatRoom) {
+      return NextResponse.json(
+        { error: "채팅방을 찾을 수 없습니다" },
+        { status: 404 }
+      );
+    }
+
+    // 내 멤버십 확인 (hiddenAt 상관없이 — 이미 숨긴 방에 재요청하는 경우 대비)
+    const membership = chatRoom.members.find(
+      (m) => m.userId === session.user.id
+    );
 
     if (!membership) {
       return NextResponse.json(
@@ -99,14 +112,27 @@ export async function DELETE(
       );
     }
 
-    // 멤버 제거
-    await prisma.chatRoomMember.delete({
-      where: {
-        id: membership.id,
-      },
+    // ── 1:1 채팅방 ──────────────────────────────────────────────
+    if (chatRoom.type === "DIRECT") {
+      // ✅ 변경: delete → hiddenAt 설정 (상대방 대화방은 유지)
+      await prisma.chatRoomMember.update({
+        where: { id: membership.id },
+        data: { hiddenAt: new Date() },
+      });
+
+      return NextResponse.json({
+        message: "대화방이 삭제되었습니다",
+      });
+    }
+
+    // ── 그룹 채팅방 ─────────────────────────────────────────────
+    // ✅ 변경: delete → hiddenAt 설정
+    await prisma.chatRoomMember.update({
+      where: { id: membership.id },
+      data: { hiddenAt: new Date() },
     });
 
-    // 시스템 메시지 생성
+    // 시스템 메시지 생성 (그룹만)
     await prisma.chatMessage.create({
       data: {
         chatRoomId,
@@ -116,13 +142,12 @@ export async function DELETE(
       },
     });
 
-    // 남은 멤버 확인
-    const remainingMembers = await prisma.chatRoomMember.count({
-      where: { chatRoomId },
+    // ✅ 변경: hiddenAt이 null인 멤버(활성 멤버)가 0명이면 방 삭제
+    const activeCount = await prisma.chatRoomMember.count({
+      where: { chatRoomId, hiddenAt: null },
     });
 
-    // 멤버가 없으면 채팅방 삭제
-    if (remainingMembers === 0) {
+    if (activeCount === 0) {
       await prisma.chatRoom.delete({
         where: { id: chatRoomId },
       });

@@ -1,52 +1,47 @@
+﻿// src/app/api/users/search/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const session = await getServerSession(authOptions);
+export async function GET(request: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
 
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const { searchParams } = new URL(request.url);
+  const q = searchParams.get("q")?.trim() ?? "";
+  const page = Math.max(1, parseInt(searchParams.get("page") ?? "1"));
+  const limit = 20;
 
-    const targetUserId = params.id;
+  if (q.length < 1) return NextResponse.json({ users: [], total: 0 });
 
-    if (session.user.id === targetUserId) {
-      return NextResponse.json(
-        { error: "자기 자신은 팔로우할 수 없습니다." },
-        { status: 400 }
-      );
-    }
+  const where = {
+    OR: [
+      { name:  { contains: q, mode: "insensitive" as const } },
+      { email: { contains: q, mode: "insensitive" as const } },
+    ],
+    id: { not: session.user.id },
+  };
 
-    // 팔로우 생성
-    await prisma.follow.create({
-      data: {
-        followerId: session.user.id,
-        followingId: targetUserId,
+  const [users, total] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      select: {
+        id: true, name: true, email: true,
+        role: true, isOnline: true, createdAt: true,
+        _count: { select: { files: true, posts: true } },
+        followers: { where: { followerId: session.user.id }, select: { id: true } },
       },
-    });
+      skip: (page - 1) * limit,
+      take: limit,
+      orderBy: [{ isOnline: "desc" }, { name: "asc" }],
+    }),
+    prisma.user.count({ where }),
+  ]);
 
-    // 🔥 알림 생성 (message 필수 추가)
-    await prisma.notification.create({
-      data: {
-        user: {
-          connect: { id: targetUserId },
-        },
-        type: "SYSTEM",
-        title: `${session.user.name}님이 팔로우했습니다`,
-        message: `${session.user.name}님이 당신을 팔로우했습니다.`, // ✅ 추가
-        link: `/users/${session.user.id}`,
-      },
-    });
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("Follow error:", error);
-    return NextResponse.json({ error: "Server Error" }, { status: 500 });
-  }
+  return NextResponse.json({
+    users: users.map((u) => ({ ...u, isFollowing: u.followers.length > 0, followers: undefined })),
+    total,
+    totalPages: Math.ceil(total / limit),
+  });
 }

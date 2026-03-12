@@ -1,10 +1,10 @@
-// src/app/api/users/me/onboarding/route.ts
+﻿// src/app/api/users/me/onboarding/route.ts
 // POST — 온보딩 완료 기록 (DB에 저장)
 // GET  — 온보딩 완료 여부 확인
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 export async function POST() {

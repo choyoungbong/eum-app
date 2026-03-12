@@ -1,221 +1,164 @@
+﻿// src/app/api/files/route.ts
+// ⚠️ 수정사항:
+// 1. myFilesWhere에 deletedAt: null 추가 (휴지통 파일 노출 방지)
+// 2. pinned=true 쿼리파라미터 지원 추가 (PinnedFilesSection용)
+
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
-// 폴더 상세 조회
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
-      return NextResponse.json(
-        { error: "인증이 필요합니다" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "인증이 필요합니다" }, { status: 401 });
     }
 
-    const folderId = params.id;
+    const { searchParams } = new URL(request.url);
+    const page      = parseInt(searchParams.get("page")      || "1");
+    const limit     = parseInt(searchParams.get("limit")     || "20");
+    const sortBy    = searchParams.get("sortBy")    || "createdAt";
+    const sortOrder = (searchParams.get("sortOrder") || "desc") as "asc" | "desc";
+    const folderId  = searchParams.get("folderId");
+    const search    = searchParams.get("search")    || "";
+    const fileType  = searchParams.get("fileType")  || "";
+    const startDate = searchParams.get("startDate");
+    const endDate   = searchParams.get("endDate");
+    const filter    = searchParams.get("filter")    || "all";
+    // ✅ 추가: 고정 파일 전용 필터
+    const pinnedOnly = searchParams.get("pinned") === "true";
 
-    const folder = await prisma.folder.findUnique({
-      where: { id: folderId },
-      include: {
-        _count: {
-          select: {
-            children: true,
-            files: true,
-          },
-        },
-        parent: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
-    });
+    const skip = (page - 1) * limit;
 
-    if (!folder) {
-      return NextResponse.json(
-        { error: "폴더를 찾을 수 없습니다" },
-        { status: 404 }
-      );
-    }
+    // ✅ 수정: deletedAt: null 추가
+    const myFilesWhere: any = {
+      userId:    session.user.id,
+      deletedAt: null,
+    };
 
-    if (folder.userId !== session.user.id) {
-      return NextResponse.json(
-        { error: "권한이 없습니다" },
-        { status: 403 }
-      );
-    }
-
-    return NextResponse.json({ folder });
-
-  } catch (error) {
-    console.error("Folder fetch error:", error);
-    return NextResponse.json(
-      { error: "폴더 조회 중 오류가 발생했습니다" },
-      { status: 500 }
-    );
-  }
-}
-
-// 폴더 수정 (이름 변경)
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json(
-        { error: "인증이 필요합니다" },
-        { status: 401 }
-      );
-    }
-
-    const folderId = params.id;
-    const body = await request.json();
-    const { name, color, icon } = body;
-
-    const folder = await prisma.folder.findUnique({
-      where: { id: folderId },
-    });
-
-    if (!folder) {
-      return NextResponse.json(
-        { error: "폴더를 찾을 수 없습니다" },
-        { status: 404 }
-      );
-    }
-
-    if (folder.userId !== session.user.id) {
-      return NextResponse.json(
-        { error: "권한이 없습니다" },
-        { status: 403 }
-      );
-    }
-
-    // 이름 변경 시 중복 확인
-    if (name && name !== folder.name) {
-      const existingFolder = await prisma.folder.findFirst({
-        where: {
-          userId: session.user.id,
-          parentId: folder.parentId,
-          name: name.trim(),
-          id: { not: folderId },
+    // 고정 파일만 조회
+    if (pinnedOnly) {
+      myFilesWhere.isPinned = true;
+      const files = await prisma.file.findMany({
+        where:   myFilesWhere,
+        orderBy: { updatedAt: "desc" },
+        take:    limit,
+        select: {
+          id: true, originalName: true, mimeType: true,
+          size: true, thumbnailUrl: true, createdAt: true,
+          isStarred: true, isPinned: true,
         },
       });
-
-      if (existingFolder) {
-        return NextResponse.json(
-          { error: "같은 이름의 폴더가 이미 존재합니다" },
-          { status: 409 }
-        );
-      }
+      return NextResponse.json({ files: files.map((f: any) => ({ ...f, size: f.size.toString() })) });
     }
 
-    // 폴더 수정
-    const updatedFolder = await prisma.folder.update({
-      where: { id: folderId },
-      data: {
-        name: name?.trim() || folder.name,
-        color: color !== undefined ? color : folder.color,
-        icon: icon !== undefined ? icon : folder.icon,
-      },
-      include: {
-        _count: {
-          select: {
-            children: true,
-            files: true,
-          },
-        },
-      },
+    if (folderId === "null" || !folderId) {
+      myFilesWhere.folderId = null;
+    } else {
+      myFilesWhere.folderId = folderId;
+    }
+
+    if (search) {
+      myFilesWhere.OR = [
+        { originalName: { contains: search, mode: "insensitive" } },
+        { filename:     { contains: search, mode: "insensitive" } },
+      ];
+    }
+
+    if (fileType === "image") {
+      myFilesWhere.mimeType = { startsWith: "image/" };
+    } else if (fileType === "video") {
+      myFilesWhere.mimeType = { startsWith: "video/" };
+    } else if (fileType === "document") {
+      myFilesWhere.OR = [
+        { mimeType: { contains: "pdf" } },
+        { mimeType: { contains: "document" } },
+        { mimeType: { contains: "word" } },
+      ];
+    }
+
+    if (startDate || endDate) {
+      myFilesWhere.createdAt = {};
+      if (startDate) myFilesWhere.createdAt.gte = new Date(startDate);
+      if (endDate)   myFilesWhere.createdAt.lte = new Date(endDate);
+    }
+
+    const sharedResources = await prisma.sharedResource.findMany({
+      where: { resourceType: "FILE", sharedWithId: session.user.id },
+    });
+    const sharedFileIds = sharedResources.map((sr: any) => sr.resourceId);
+
+    const sharedFilesData = sharedFileIds.length > 0
+      ? await prisma.file.findMany({
+          where:   { id: { in: sharedFileIds }, deletedAt: null },
+          include: { user: { select: { id: true, name: true, email: true } }, fileTags: { include: { tag: true } } },
+        })
+      : [];
+
+    const sharedFilesWithMeta = sharedFilesData.map((file: any) => {
+      const shareInfo = sharedResources.find((sr: any) => sr.resourceId === file.id);
+      return {
+        ...file, size: file.size.toString(),
+        isShared: true, isOwner: false,
+        sharedBy: file.user?.name, sharedByEmail: file.user?.email,
+        sharedAt: shareInfo?.createdAt, permission: shareInfo?.permission,
+      };
     });
 
+    let myFiles:      any[] = [];
+    let totalMyFiles  = 0;
+
+    if (filter === "all" || filter === "mine") {
+      [myFiles, totalMyFiles] = await Promise.all([
+        prisma.file.findMany({
+          where:   myFilesWhere,
+          orderBy: { [sortBy]: sortOrder },
+          skip:    filter === "mine" ? skip : undefined,
+          take:    filter === "mine" ? limit : undefined,
+          include: { fileTags: { include: { tag: true } } },
+        }),
+        prisma.file.count({ where: myFilesWhere }),
+      ]);
+    }
+
+    const myFilesWithMeta = myFiles.map((file) => ({
+      ...file, size: file.size.toString(), isShared: false, isOwner: true,
+    }));
+
+    let resultFiles: any[] = [];
+    let finalTotal = 0;
+
+    if (filter === "all") {
+      const combined = [...myFilesWithMeta, ...sharedFilesWithMeta];
+      combined.sort((a, b) => {
+        const aVal = (a as any)[sortBy], bVal = (b as any)[sortBy];
+        return sortOrder === "desc" ? (aVal > bVal ? -1 : 1) : (aVal > bVal ? 1 : -1);
+      });
+      finalTotal  = combined.length;
+      resultFiles = combined.slice(skip, skip + limit);
+    } else if (filter === "mine") {
+      resultFiles = myFilesWithMeta;
+      finalTotal  = totalMyFiles;
+    } else {
+      sharedFilesWithMeta.sort((a: any, b: any) => {
+        const aVal = (a as any)[sortBy], bVal = (b as any)[sortBy];
+        return sortOrder === "desc" ? (aVal > bVal ? -1 : 1) : (aVal > bVal ? 1 : -1);
+      });
+      finalTotal  = sharedFilesWithMeta.length;
+      resultFiles = sharedFilesWithMeta.slice(skip, skip + limit);
+    }
+
     return NextResponse.json({
-      message: "폴더가 수정되었습니다",
-      folder: updatedFolder,
+      files: resultFiles,
+      pagination: { total: finalTotal, page, limit, totalPages: Math.ceil(finalTotal / limit) },
+      stats: { myFiles: totalMyFiles, sharedFiles: sharedFilesWithMeta.length },
     });
 
   } catch (error) {
-    console.error("Folder update error:", error);
-    return NextResponse.json(
-      { error: "폴더 수정 중 오류가 발생했습니다" },
-      { status: 500 }
-    );
-  }
-}
-
-// 폴더 삭제
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json(
-        { error: "인증이 필요합니다" },
-        { status: 401 }
-      );
-    }
-
-    const folderId = params.id;
-
-    const folder = await prisma.folder.findUnique({
-      where: { id: folderId },
-      include: {
-        _count: {
-          select: {
-            children: true,
-            files: true,
-          },
-        },
-      },
-    });
-
-    if (!folder) {
-      return NextResponse.json(
-        { error: "폴더를 찾을 수 없습니다" },
-        { status: 404 }
-      );
-    }
-
-    if (folder.userId !== session.user.id) {
-      return NextResponse.json(
-        { error: "권한이 없습니다" },
-        { status: 403 }
-      );
-    }
-
-    // 하위 폴더나 파일이 있으면 경고
-    if (folder._count.children > 0 || folder._count.files > 0) {
-      return NextResponse.json(
-        { 
-          error: "폴더가 비어있지 않습니다",
-          info: `하위 폴더 ${folder._count.children}개, 파일 ${folder._count.files}개`
-        },
-        { status: 400 }
-      );
-    }
-
-    // 폴더 삭제
-    await prisma.folder.delete({
-      where: { id: folderId },
-    });
-
-    return NextResponse.json({
-      message: "폴더가 삭제되었습니다",
-    });
-
-  } catch (error) {
-    console.error("Folder delete error:", error);
-    return NextResponse.json(
-      { error: "폴더 삭제 중 오류가 발생했습니다" },
-      { status: 500 }
-    );
+    console.error("Files fetch error:", error);
+    return NextResponse.json({ error: "파일 목록 조회 중 오류가 발생했습니다" }, { status: 500 });
   }
 }

@@ -15,7 +15,8 @@ export async function GET(request: NextRequest) {
     }
 
     const chatRoomMembers = await prisma.chatRoomMember.findMany({
-      where: { userId: session.user.id },
+      // ✅ 변경: hiddenAt: null 조건 추가 — 내가 삭제(숨긴)한 방은 목록에서 제외
+      where: { userId: session.user.id, hiddenAt: null },
       include: {
         chatRoom: {
           include: {
@@ -86,7 +87,6 @@ export async function GET(request: NextRequest) {
 }
 
 // ─── POST /api/chat/rooms — 채팅방 생성 ─────────────────
-// ✅ 추가: 이 핸들러가 없어서 405 Method Not Allowed 발생
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -145,6 +145,17 @@ export async function POST(request: NextRequest) {
       });
 
       if (existing) {
+        // ✅ 추가: 내가 이전에 삭제(숨김)한 방이면 hiddenAt 초기화 → 목록에 다시 표시
+        const myMembership = existing.members.find(
+          (m) => m.userId === session.user.id
+        );
+        if (myMembership?.hiddenAt) {
+          await prisma.chatRoomMember.update({
+            where: { id: myMembership.id },
+            data: { hiddenAt: null },
+          });
+        }
+
         return NextResponse.json({ chatRoom: existing, isExisting: true });
       }
     }

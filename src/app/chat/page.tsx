@@ -1,15 +1,15 @@
 "use client";
-// src/app/chat/page.tsx — EUM 브랜딩 고도화 + 모바일 검색버튼 overflow 수정
+// src/app/chat/page.tsx
 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useSocket } from "@/hooks/useSocket";
 import { toast } from "@/components/Toast";
 import {
   MessageSquare, Plus, ChevronLeft, Search,
-  Phone, Video, Users, Wifi, WifiOff,
+  Phone, Video, Users, Wifi, WifiOff, Trash2,
 } from "lucide-react";
 
 interface ChatRoom {
@@ -35,6 +35,13 @@ export default function ChatPage() {
   const [isSearching, setIsSearching] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [creatingUserId, setCreatingUserId] = useState<string | null>(null);
+
+  // 삭제 관련 상태
+  const [contextMenu, setContextMenu] = useState<{ room: ChatRoom; x: number; y: number } | null>(null);
+  const [confirmRoom, setConfirmRoom] = useState<ChatRoom | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (status === "unauthenticated") router.push("/login");
@@ -72,6 +79,17 @@ export default function ChatPage() {
     return () => { socket.off("message:receive", handleNewMessage); socket.off("message:new", handleNewMessage); };
   }, [socket, session?.user?.id]);
 
+  // 컨텍스트 메뉴 외부 클릭 닫기
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
   const searchUsers = async () => {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
@@ -106,6 +124,46 @@ export default function ChatPage() {
   };
 
   const closeModal = () => { setShowNewChatModal(false); setSearchResults([]); setSearchQuery(""); };
+
+  // 롱프레스 핸들러
+  const handleTouchStart = (room: ChatRoom, e: React.TouchEvent) => {
+    longPressTimer.current = setTimeout(() => {
+      const touch = e.touches[0];
+      setContextMenu({ room, x: touch.clientX, y: touch.clientY });
+      if ("vibrate" in navigator) navigator.vibrate(50);
+    }, 500);
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  // 우클릭 컨텍스트 메뉴
+  const handleContextMenu = (room: ChatRoom, e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ room, x: e.clientX, y: e.clientY });
+  };
+
+  // 삭제 실행
+  const handleDeleteRoom = async () => {
+    if (!confirmRoom) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/chat/rooms/${confirmRoom.id}`, { method: "DELETE" });
+      if (res.ok) {
+        setChatRooms((prev) => prev.filter((r) => r.id !== confirmRoom.id));
+        toast.success(confirmRoom.type === "DIRECT" ? "대화방이 삭제되었습니다" : "채팅방에서 나갔습니다");
+        setConfirmRoom(null);
+      } else {
+        const data = await res.json();
+        toast.error(data.error || "삭제 실패");
+      }
+    } catch { toast.error("서버 오류가 발생했습니다"); }
+    finally { setDeleting(false); }
+  };
 
   const getChatRoomName = (chatRoom: ChatRoom) => {
     if (chatRoom.type === "GROUP") return chatRoom.name || "그룹 채팅";
@@ -169,7 +227,6 @@ export default function ChatPage() {
                 <MessageSquare size={14} className="text-white" />
               </div>
               <h1 className="text-lg font-bold tracking-tight">채팅</h1>
-              {/* 연결 상태 */}
               <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
                 isConnected
                   ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
@@ -225,47 +282,154 @@ export default function ChatPage() {
               const name = getChatRoomName(chatRoom);
               const initial = name[0]?.toUpperCase() || "?";
               return (
-                <Link
+                <div
                   key={chatRoom.id}
-                  href={`/chat/${chatRoom.id}`}
-                  className="flex items-center gap-3 bg-white/3 hover:bg-white/5 border border-white/5 hover:border-white/10 rounded-2xl p-4 transition-all duration-200 group"
+                  onTouchStart={(e) => handleTouchStart(chatRoom, e)}
+                  onTouchEnd={handleTouchEnd}
+                  onTouchMove={handleTouchEnd}
+                  onContextMenu={(e) => handleContextMenu(chatRoom, e)}
+                  className="relative"
                 >
-                  {/* 아바타 */}
-                  <div className="relative shrink-0">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-white/8 flex items-center justify-center text-blue-300 font-bold text-lg">
-                      {initial}
-                    </div>
-                    {chatRoom.type === "GROUP" && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center">
-                        <Users size={10} className="text-zinc-400" />
+                  <Link
+                    href={`/chat/${chatRoom.id}`}
+                    className="flex items-center gap-3 bg-white/3 hover:bg-white/5 border border-white/5 hover:border-white/10 rounded-2xl p-4 transition-all duration-200 group"
+                  >
+                    {/* 아바타 */}
+                    <div className="relative shrink-0">
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-white/8 flex items-center justify-center text-blue-300 font-bold text-lg">
+                        {initial}
                       </div>
-                    )}
-                    {online && chatRoom.type === "DIRECT" && (
-                      <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-zinc-950" />
-                    )}
-                  </div>
-
-                  {/* 내용 */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="font-semibold text-zinc-100 text-sm group-hover:text-white transition-colors">{name}</span>
-                      <span className="text-xs text-zinc-600 shrink-0 ml-2">{formatDate(chatRoom.updatedAt)}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm text-zinc-500 truncate">{getLastMessage(chatRoom)}</p>
-                      {chatRoom.unreadCount > 0 && (
-                        <span className="ml-2 min-w-[20px] h-5 px-1.5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center shrink-0 font-medium">
-                          {chatRoom.unreadCount > 99 ? "99+" : chatRoom.unreadCount}
-                        </span>
+                      {chatRoom.type === "GROUP" && (
+                        <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center">
+                          <Users size={10} className="text-zinc-400" />
+                        </div>
+                      )}
+                      {online && chatRoom.type === "DIRECT" && (
+                        <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-zinc-950" />
                       )}
                     </div>
-                  </div>
-                </Link>
+
+                    {/* 내용 */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="font-semibold text-zinc-100 text-sm group-hover:text-white transition-colors">{name}</span>
+                        <span className="text-xs text-zinc-600 shrink-0 ml-2">{formatDate(chatRoom.updatedAt)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm text-zinc-500 truncate">{getLastMessage(chatRoom)}</p>
+                        {chatRoom.unreadCount > 0 && (
+                          <span className="ml-2 min-w-[20px] h-5 px-1.5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center shrink-0 font-medium">
+                            {chatRoom.unreadCount > 99 ? "99+" : chatRoom.unreadCount}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </Link>
+                </div>
               );
             })}
           </div>
         )}
       </main>
+
+      {/* 컨텍스트 메뉴 (롱프레스 / 우클릭) */}
+      {contextMenu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setContextMenu(null)} />
+          <div
+            ref={contextMenuRef}
+            className="fixed z-50 bg-zinc-900 border border-white/10 rounded-2xl shadow-2xl overflow-hidden min-w-[200px]"
+            style={{
+              top: Math.min(contextMenu.y, window.innerHeight - 130),
+              left: Math.min(contextMenu.x, window.innerWidth - 220),
+            }}
+          >
+            <div className="px-4 py-3 border-b border-white/8">
+              <p className="text-sm font-semibold text-zinc-100 truncate">
+                {getChatRoomName(contextMenu.room)}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setContextMenu(null);
+                router.push(`/chat/${contextMenu.room.id}`);
+              }}
+              className="w-full px-4 py-3 text-left text-sm text-zinc-300 hover:bg-white/5 flex items-center gap-3 transition-colors"
+            >
+              <MessageSquare size={14} className="text-zinc-500" />
+              대화방 열기
+            </button>
+            <button
+              onClick={() => {
+                const room = contextMenu.room;
+                setContextMenu(null);
+                setConfirmRoom(room);
+              }}
+              className="w-full px-4 py-3 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-3 transition-colors"
+            >
+              <Trash2 size={14} className="text-red-500" />
+              {contextMenu.room.type === "DIRECT" ? "대화방 삭제" : "채팅방 나가기"}
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* 삭제 확인 다이얼로그 */}
+      {confirmRoom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => !deleting && setConfirmRoom(null)}
+          />
+          <div className="relative bg-zinc-900 border border-white/10 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="p-6">
+              <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto mb-4">
+                <Trash2 size={20} className="text-red-400" />
+              </div>
+              <h3 className="text-base font-bold text-zinc-100 text-center mb-2">
+                {confirmRoom.type === "DIRECT" ? "대화방 삭제" : "채팅방 나가기"}
+              </h3>
+              <p className="text-sm text-zinc-400 text-center leading-relaxed">
+                {confirmRoom.type === "DIRECT" ? (
+                  <>
+                    <span className="text-zinc-200 font-medium">{getChatRoomName(confirmRoom)}</span>
+                    님과의 대화방이 삭제됩니다.<br />
+                    <span className="text-zinc-600 text-xs">상대방 대화방은 유지되며, 새 메시지가 오면 다시 나타납니다.</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-zinc-200 font-medium">{getChatRoomName(confirmRoom)}</span>
+                    에서 나갑니다.<br />
+                    <span className="text-zinc-600 text-xs">다른 멤버들의 대화는 계속 유지됩니다.</span>
+                  </>
+                )}
+              </p>
+            </div>
+            <div className="flex border-t border-white/8">
+              <button
+                onClick={() => setConfirmRoom(null)}
+                disabled={deleting}
+                className="flex-1 py-4 text-sm font-medium text-zinc-400 hover:bg-white/5 transition-colors disabled:opacity-50"
+              >
+                취소
+              </button>
+              <div className="w-px bg-white/8" />
+              <button
+                onClick={handleDeleteRoom}
+                disabled={deleting}
+                className="flex-1 py-4 text-sm font-bold text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+              >
+                {deleting ? (
+                  <span className="flex items-center justify-center gap-1.5">
+                    <span className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                    처리 중...
+                  </span>
+                ) : confirmRoom.type === "DIRECT" ? "삭제" : "나가기"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 새 채팅 모달 */}
       {showNewChatModal && (
@@ -280,7 +444,6 @@ export default function ChatPage() {
             <h3 className="text-lg font-bold mb-1 text-zinc-100">새 채팅 시작</h3>
             <p className="text-xs text-zinc-500 mb-4">이름 또는 이메일로 사용자를 검색하세요</p>
 
-            {/* ✅ 모바일 overflow 수정: flex-1 min-w-0 on input wrapper + shrink-0 on button */}
             <div className="flex gap-2 mb-4">
               <div className="flex-1 min-w-0 relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
@@ -305,7 +468,6 @@ export default function ChatPage() {
               </button>
             </div>
 
-            {/* 검색 결과 */}
             {searchResults.length > 0 && (
               <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
                 {searchResults.map((user) => (
